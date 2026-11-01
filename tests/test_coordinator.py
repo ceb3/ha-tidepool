@@ -60,7 +60,7 @@ async def test_fast_refresh_parses_latest(
     )
     assert coordinator.data.latest.smbg is not None
     assert coordinator.data.latest.smbg.id == "rec-3"
-    assert set(coordinator.data.window) == {"basal", "bolus", "food"}
+    assert set(coordinator.data.window) == {"basal", "bolus", "food", "deviceEvent"}
 
     aioclient_mock.clear_requests()
     mock_latest(

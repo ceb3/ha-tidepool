@@ -11,6 +11,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.test_util.aiohttp import (
     AiohttpClientMocker,
 )
+from yarl import URL
 
 from custom_components.tidepool.const import (
     API_URL,
@@ -28,9 +29,12 @@ LOGIN_URL = f"{API_URL}/auth/login"
 FIXTURES = Path(__file__).parent / "fixtures"
 
 # The query that tells the latest request from the 24 h window request; both
-# go to ``/data/{user_id}``.
+# go to ``/data/{user_id}``, as do the slow coordinator's device event requests.
 LATEST_QUERY = {"latest": "true"}
-WINDOW_QUERY = {"type": "basal,bolus,food"}
+WINDOW_QUERY = {"type": "basal,bolus,food,deviceEvent"}
+# The device event subtypes the slow coordinator asks for with ``latest``; a
+# prime is asked for over a time range instead.
+LATEST_DEVICE_EVENTS = ("alarm", "reservoirChange", "status")
 
 
 def load_fixture(name: str) -> Any:
@@ -116,13 +120,16 @@ def mock_slow(
     data_sets_status: int = 200,
     data_sources: list[dict] | None = None,
     data_sets: list[dict] | None = None,
+    device_events: dict[str, list[dict]] | None = None,
+    device_events_status: int = 200,
 ) -> None:
     """Mock a user's slow endpoints: a synthetic cgm summary, no bgm summary.
 
     A ``None`` ``cgm`` means the fixture; an empty dict is an empty summary.
-    Data sources and sets are empty unless given. Profile is mocked by
-    ``mock_profile``.
+    Data sources and sets are empty unless given, and so are the device
+    events (records by subType). Profile is mocked by ``mock_profile``.
     """
+    mock_device_events(aioclient_mock, user_id, device_events, device_events_status)
     base = f"{API_URL}/v1/summaries"
     aioclient_mock.get(
         f"{base}/cgm/{user_id}",
@@ -143,6 +150,31 @@ def mock_slow(
             aioclient_mock.get(url, status=status)
 
 
+def mock_device_events(
+    aioclient_mock: AiohttpClientMocker,
+    user_id: str = USER_ID,
+    events: dict[str, list[dict]] | None = None,
+    status: int = 200,
+) -> None:
+    """Mock the slow coordinator's device event requests, by subType.
+
+    The mocker answers with the first mock whose query is a subset of the
+    request's, so the latest mock (``latest=true``) would also answer these
+    requests: they are moved to the front of the mocker's list.
+    """
+    events = events or {}
+    url = latest_url(user_id)
+    queries = [{**LATEST_QUERY, "subType": s} for s in LATEST_DEVICE_EVENTS]
+    queries.append({"type": "deviceEvent", "subType": "prime"})
+    for query in queries:
+        if status == 200:
+            aioclient_mock.get(url, params=query, json=events.get(query["subType"], []))
+        else:
+            aioclient_mock.get(url, params=query, status=status)
+        mocks = aioclient_mock._mocks
+        mocks.insert(0, mocks.pop())
+
+
 def summary_gets(
     aioclient_mock: AiohttpClientMocker, user_id: str, kind: str = "cgm"
 ) -> int:
@@ -161,13 +193,25 @@ def login_posts(aioclient_mock: AiohttpClientMocker) -> int:
     )
 
 
+def data_gets(aioclient_mock: AiohttpClientMocker, user_id: str) -> list[URL]:
+    """The ``/data/{user_id}`` request URLs made, in order."""
+    return [
+        url
+        for method, url, _, _ in aioclient_mock.mock_calls
+        if method.lower() == "get" and url.path == f"/data/{user_id}"
+    ]
+
+
+def device_event_gets(aioclient_mock: AiohttpClientMocker, user_id: str) -> list[URL]:
+    """The slow coordinator's device event request URLs (they name a subType)."""
+    return [url for url in data_gets(aioclient_mock, user_id) if "subType" in url.query]
+
+
 def _data_gets(aioclient_mock: AiohttpClientMocker, user_id: str, key: str) -> int:
     return sum(
         1
-        for method, url, _, _ in aioclient_mock.mock_calls
-        if method.lower() == "get"
-        and url.path == f"/data/{user_id}"
-        and key in url.query
+        for url in data_gets(aioclient_mock, user_id)
+        if key in url.query and "subType" not in url.query
     )
 
 

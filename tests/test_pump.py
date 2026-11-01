@@ -34,6 +34,7 @@ from custom_components.tidepool.models import basal_units
 from .entries import (
     LATEST_QUERY,
     USER_ID,
+    data_gets,
     latest_gets,
     latest_url,
     login_posts,
@@ -528,7 +529,7 @@ async def test_entity_names_avoid_dosing_vocabulary() -> None:
         for platform, entities in strings["entity"].items()
         for key, entity in entities.items()
     ]
-    for platform in ("sensor", "binary_sensor"):
+    for platform in ("sensor", "binary_sensor", "event"):
         assert any(p == platform for p, _, _ in names)
     for _, key, name in names:
         for word in ("recommended", "correction"):
@@ -539,6 +540,15 @@ async def test_entity_names_avoid_dosing_vocabulary() -> None:
 # --- the 24 h window ------------------------------------------------------
 
 
+def _window_urls(aioclient_mock: AiohttpClientMocker) -> list[URL]:
+    """The window request URLs; the slow device event requests name a subType."""
+    return [
+        url
+        for url in data_gets(aioclient_mock, USER_ID)
+        if "type" in url.query and "subType" not in url.query
+    ]
+
+
 async def test_window_request(
     hass: HomeAssistant,
     aioclient_mock: AiohttpClientMocker,
@@ -546,14 +556,10 @@ async def test_window_request(
 ) -> None:
     await _setup(hass, aioclient_mock, freezer)
 
-    windows = [
-        url
-        for method, url, _, _ in aioclient_mock.mock_calls
-        if url.path == f"/data/{USER_ID}" and "type" in url.query
-    ]
+    windows = _window_urls(aioclient_mock)
     assert len(windows) == 1
-    # One request for all three types, at the same refresh as the latest.
-    assert windows[0].query["type"] == "basal,bolus,food"
+    # One request for all four types, at the same refresh as the latest.
+    assert windows[0].query["type"] == "basal,bolus,food,deviceEvent"
     # 24 h plus a 12 h lookback for the basal segment running into the window.
     assert windows[0].query["startDate"] == "2026-10-31T00:00:00.000Z"
     assert windows[0].query["endDate"] == "2026-11-01T12:00:00.000Z"
@@ -571,11 +577,7 @@ async def test_window_cold_start_counts_straddling_basal(
     straddling = _basal("ba1", NOW - DAY - timedelta(hours=6), 8, "scheduled", 1.0)
     await _setup(hass, aioclient_mock, freezer, window=[straddling])
 
-    (window,) = [
-        url
-        for _, url, _, _ in aioclient_mock.mock_calls
-        if url.path == f"/data/{USER_ID}" and "type" in url.query
-    ]
+    (window,) = _window_urls(aioclient_mock)
     assert window.query["startDate"] == "2026-10-31T00:00:00.000Z"
     assert _state(hass, "insulin_basal_24h").state == "2.0"
 

@@ -208,8 +208,10 @@ def parse_summary(payload: Any) -> dict[str, Summary]:
 # Insulin and carbs: only records Tidepool already holds are summed or clipped.
 # Nothing here estimates, predicts or suggests a dose.
 
-# The record types the fast coordinator keeps for the last 24 hours.
-WINDOW_TYPES = ("basal", "bolus", "food")
+# The record types the fast coordinator keeps for the last 24 hours. Device
+# events (alarms among them) have no duration: like boluses, they are kept
+# while their time is inside the window.
+WINDOW_TYPES = ("basal", "bolus", "food", "deviceEvent")
 DAY = timedelta(hours=24)
 # How far before the window the window request starts. Tidepool filters on a
 # record's start time, so without it the basal segment that began before the
@@ -404,3 +406,54 @@ def carbs_on_board(record: dict) -> float | None:
     if record.get("type") == "dosingDecision":
         return _amount(record.get("carbsOnBoard"))
     return None
+
+
+# Device events: the slow coordinator asks for the newest of each of these
+# subtypes, and for the primes of the last PRIME_LOOKBACK (``latest`` would
+# give only the newest prime, whatever its target).
+LATEST_DEVICE_EVENTS = ("alarm", "reservoirChange", "status")
+PRIME_LOOKBACK = timedelta(days=30)
+PRIME_TARGETS = ("cannula", "tubing")
+
+# Alarm types (``alarmType``) as the Tidepool data spec lists them; ``other``
+# is its catch-all and stands in for any type it does not list.
+ALARM_TYPES = (
+    "auto_off",
+    "low_insulin",
+    "low_power",
+    "no_delivery",
+    "no_insulin",
+    "no_power",
+    "occlusion",
+    "over_limit",
+    "other",
+)
+
+
+def alarm_type(record: dict) -> str:
+    """The alarm type of an alarm record, ``other`` if the spec does not list it."""
+    value = record.get("alarmType")
+    return value if value in ALARM_TYPES else "other"
+
+
+def _device_event_key(record: dict) -> str | None:
+    """A device event's subType; a prime's is split by target (``prime_cannula``)."""
+    sub_type = record.get("subType")
+    if sub_type in LATEST_DEVICE_EVENTS:
+        return sub_type
+    if sub_type == "prime" and record.get("primeTarget") in PRIME_TARGETS:
+        return f"prime_{record['primeTarget']}"
+    return None
+
+
+def newest_device_events(records: Iterable[Any]) -> dict[str, dict]:
+    """The newest device event of each kind, keyed by ``_device_event_key``."""
+    newest: dict[str, tuple[datetime, dict]] = {}
+    for record in records:
+        time = _record_time(record)
+        if time is None or record["type"] != "deviceEvent":
+            continue
+        key = _device_event_key(record)
+        if key is not None and (key not in newest or time > newest[key][0]):
+            newest[key] = (time, record)
+    return {key: record for key, (_, record) in newest.items()}

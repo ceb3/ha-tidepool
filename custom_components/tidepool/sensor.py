@@ -22,6 +22,7 @@ from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
 
 from .coordinator import (
     FastData,
+    SlowData,
     TidepoolConfigEntry,
     TidepoolFastCoordinator,
     TidepoolSlowCoordinator,
@@ -32,6 +33,7 @@ from .models import (
     BASAL_DELIVERY_TYPES,
     SUMMARY_PERIODS,
     Summary,
+    alarm_type,
     basal_period,
     basal_units,
     carbs_on_board,
@@ -451,6 +453,67 @@ LAST_UPLOAD = SensorEntityDescription(
 )
 
 
+@dataclass(frozen=True, kw_only=True)
+class DeviceEventSensorDescription(SensorEntityDescription):
+    """When the newest device event of a kind happened.
+
+    ``event`` is its key in ``SlowData.device_events``; ``attrs_fn`` gets
+    that record and the slow data.
+    """
+
+    event: str
+    attrs_fn: Callable[[dict, SlowData], dict[str, Any] | None] = lambda *_: None
+
+
+def _tubing_attrs(_record: dict, data: SlowData) -> dict[str, Any] | None:
+    tubing = data.device_events.get("prime_tubing")
+    return None if tubing is None else {"tubing": _time_attr(tubing)}
+
+
+# Delivery statuses and their reasons as the Tidepool data spec lists them.
+DELIVERY_STATUSES = ("suspended", "resumed")
+STATUS_REASONS = ("automatic", "manual")
+
+
+def _status_attrs(record: dict, _data: SlowData) -> dict[str, Any]:
+    status = record.get("status")
+    if status not in DELIVERY_STATUSES:
+        return {"status": None, "reason": None}
+    reason = record.get("reason")
+    reason = reason.get(status) if isinstance(reason, dict) else None
+    return {"status": status, "reason": reason if reason in STATUS_REASONS else None}
+
+
+def _device_event_sensor(
+    key: str,
+    event: str,
+    attrs_fn: Callable[[dict, SlowData], dict[str, Any] | None] = lambda *_: None,
+    *,
+    enabled: bool = True,
+) -> DeviceEventSensorDescription:
+    return DeviceEventSensorDescription(
+        key=key,
+        translation_key=key,
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=enabled,
+        event=event,
+        attrs_fn=attrs_fn,
+    )
+
+
+DEVICE_EVENT_SENSORS = (
+    _device_event_sensor(
+        "last_alarm", "alarm", lambda record, _: {"alarm_type": alarm_type(record)}
+    ),
+    _device_event_sensor("last_reservoir_change", "reservoirChange"),
+    # A cannula prime is the site change; a tubing prime alone is not.
+    _device_event_sensor("last_site_change", "prime_cannula", _tubing_attrs),
+    _device_event_sensor("last_tubing_prime", "prime_tubing", enabled=False),
+    _device_event_sensor("last_status_change", "status", _status_attrs),
+)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: TidepoolConfigEntry,
@@ -468,6 +531,7 @@ async def async_setup_entry(
         slow = runtime.slow[user_id]
         entities.extend(SummarySensor(slow, d, name) for d in SUMMARY_SENSORS)
         entities.append(LastUploadSensor(slow, LAST_UPLOAD, name))
+        entities.extend(DeviceEventSensor(slow, d, name) for d in DEVICE_EVENT_SENSORS)
     async_add_entities(entities)
 
 
@@ -591,3 +655,28 @@ class LastUploadSensor(TidepoolEntity[TidepoolSlowCoordinator], SensorEntity):
     def native_value(self) -> datetime | None:
         times = (upload_time(s) for s in self.coordinator.data.data_sets)
         return max((t for t in times if t is not None), default=None)
+
+
+class DeviceEventSensor(TidepoolEntity[TidepoolSlowCoordinator], SensorEntity):
+    """When the newest alarm, reservoir change, prime or status change happened."""
+
+    _device_role = DeviceRole.PUMP
+    entity_description: DeviceEventSensorDescription
+
+    @property
+    def _record(self) -> dict | None:
+        return self.coordinator.data.device_events.get(self.entity_description.event)
+
+    @property
+    @override
+    def native_value(self) -> datetime | None:
+        record = self._record
+        return None if record is None else parse_time(record["time"])
+
+    @property
+    @override
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        record = self._record
+        if record is None:
+            return None
+        return self.entity_description.attrs_fn(record, self.coordinator.data)

@@ -104,11 +104,22 @@ class TidepoolClient:
         """Return the id of the signed-in account, once known."""
         return self._auth.user_id
 
-    async def latest(self, user_id: str) -> list[dict]:
-        """Return the latest record of each type for a user."""
-        result = await self._get(
-            f"/data/{user_id}", "/data/{user_id}", {"latest": "true"}
-        )
+    async def latest(
+        self,
+        user_id: str,
+        record_type: str | None = None,
+        sub_type: str | None = None,
+    ) -> list[dict]:
+        """Return the latest record of each type for a user.
+
+        With a type and a subType, only the latest record of that subType.
+        """
+        params = {"latest": "true"}
+        if record_type is not None:
+            params["type"] = record_type
+        if sub_type is not None:
+            params["subType"] = sub_type
+        result = await self._get(f"/data/{user_id}", "/data/{user_id}", params)
         return _expect_list(result)
 
     async def data(
@@ -117,6 +128,7 @@ class TidepoolClient:
         types: list[str],
         start: datetime,
         end: datetime,
+        sub_type: str | None = None,
     ) -> list[dict]:
         """Return records of the given types between ``start`` and ``end``."""
         params = {
@@ -124,6 +136,8 @@ class TidepoolClient:
             "startDate": _format_time(start),
             "endDate": _format_time(end),
         }
+        if sub_type is not None:
+            params["subType"] = sub_type
         result = await self._get(f"/data/{user_id}", "/data/{user_id}", params)
         return _expect_list(result)
 

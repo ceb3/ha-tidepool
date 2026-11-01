@@ -91,7 +91,7 @@ async def test_setup_and_unload_entry(
         assert coordinator.user_id == user_id
         assert coordinator.update_interval == timedelta(minutes=5)
         assert coordinator.last_update_success
-        assert set(coordinator.data.window) == {"basal", "bolus", "food"}
+        assert set(coordinator.data.window) == {"basal", "bolus", "food", "deviceEvent"}
         assert latest_gets(aioclient_mock, user_id) == 1
         assert window_gets(aioclient_mock, user_id) == 1
     assert login_posts(aioclient_mock) == 1  # both patients share one session

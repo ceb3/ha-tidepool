@@ -72,6 +72,50 @@
         "name": "{provider} connection"
       }
     },
+    "event": {
+      "alarm": {
+        "name": "Alarm",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "auto_off": "Auto off",
+              "low_insulin": "Low insulin",
+              "low_power": "Low power",
+              "no_delivery": "No delivery",
+              "no_insulin": "No insulin",
+              "no_power": "No power",
+              "occlusion": "Occlusion",
+              "over_limit": "Over limit",
+              "other": "Other"
+            }
+          }
+        }
+      },
+      "meal": {
+        "name": "Meal",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "meal": "Meal"
+            }
+          }
+        }
+      },
+      "bolus": {
+        "name": "Bolus",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "normal": "Normal",
+              "square": "Extended",
+              "dual_square": "Dual wave",
+              "automated": "Automated",
+              "other": "Other"
+            }
+          }
+        }
+      }
+    },
     "sensor": {
       "glucose": {
         "name": "Glucose"
@@ -201,6 +245,21 @@
       },
       "last_upload": {
         "name": "Last upload"
+      },
+      "last_alarm": {
+        "name": "Last alarm"
+      },
+      "last_reservoir_change": {
+        "name": "Last reservoir change"
+      },
+      "last_site_change": {
+        "name": "Last site change"
+      },
+      "last_tubing_prime": {
+        "name": "Last tubing prime"
+      },
+      "last_status_change": {
+        "name": "Last delivery status change"
       }
     }
   }

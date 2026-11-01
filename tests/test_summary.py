@@ -46,6 +46,7 @@ from .entries import (
     latest_gets,
     load_fixture,
     login_posts,
+    mock_device_events,
     mock_latest,
     mock_login,
     mock_profile,
@@ -323,6 +324,7 @@ async def test_sparse_account_without_summaries_loads(
     aioclient_mock.get(f"{API_URL}/v1/summaries/bgm/{USER_ID}", status=404)
     aioclient_mock.get(f"{API_URL}/v1/users/{USER_ID}/data_sources", status=404)
     aioclient_mock.get(f"{API_URL}/v1/users/{USER_ID}/data_sets", status=404)
+    mock_device_events(aioclient_mock)
 
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()

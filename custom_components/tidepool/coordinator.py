@@ -37,10 +37,13 @@ from .const import (
 from .models import (
     BASAL_LOOKBACK,
     DAY,
+    LATEST_DEVICE_EVENTS,
+    PRIME_LOOKBACK,
     WINDOW_TYPES,
     Latest,
     Summary,
     merge_window,
+    newest_device_events,
     parse_latest,
     parse_summary,
 )
@@ -53,7 +56,8 @@ class FastData:
     """What one fast refresh produces for one patient."""
 
     latest: Latest
-    # The basal, bolus and food records of the last 24 hours, per type.
+    # The basal, bolus, food and device event records of the last 24 hours,
+    # per type.
     window: dict[str, list[dict]] = field(default_factory=dict)
 
 
@@ -66,6 +70,9 @@ class SlowData:
     data_sources: list[dict] = field(default_factory=list)
     data_sets: list[dict] = field(default_factory=list)
     profile: dict = field(default_factory=dict)
+    # The newest alarm, reservoir change, status change and prime of each
+    # target, keyed as ``models.newest_device_events`` keys them.
+    device_events: dict[str, dict] = field(default_factory=dict)
 
     def summary(self, kind: str, period: str) -> Summary | None:
         """Return one period of a summary, or None if Tidepool has none."""
@@ -271,8 +278,13 @@ class TidepoolSlowCoordinator(TidepoolCoordinator[SlowData]):
             summaries={"cgm": parse_summary(cgm), "bgm": parse_summary(bgm)}
         )
         # A shared patient may withhold these (403); the rest is then skipped.
+        # A 403 also ends the session, so a later request would sign in again:
+        # the device events (``/data``, which the fast coordinator already
+        # reads) go first and the rest stays as it was.
         withhold = self.user_id != self.client.user_id
+        events: list[dict] = []
         try:
+            await self._fetch_device_events(events, withhold)
             data.data_sources = await self._optional(
                 lambda: self.client.data_sources(self.user_id), [], withhold=withhold
             )
@@ -284,4 +296,26 @@ class TidepoolSlowCoordinator(TidepoolCoordinator[SlowData]):
             )
         except _Withheld:
             _LOGGER.debug("A shared patient withholds some optional data")
+        data.device_events = newest_device_events(events)
         return data
+
+    async def _fetch_device_events(self, records: list[dict], withhold: bool) -> None:
+        """Add the newest device events to ``records``: a request per subType.
+
+        They are days apart (a reservoir or site change), so they come from
+        here rather than the 24 h window.
+        """
+        now = dt_util.utcnow()
+        requests = [
+            lambda sub_type=sub_type: self.client.latest(
+                self.user_id, "deviceEvent", sub_type
+            )
+            for sub_type in LATEST_DEVICE_EVENTS
+        ]
+        requests.append(
+            lambda: self.client.data(
+                self.user_id, ["deviceEvent"], now - PRIME_LOOKBACK, now, "prime"
+            )
+        )
+        for request in requests:
+            records.extend(await self._optional(request, [], withhold=withhold))
