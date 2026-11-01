@@ -15,6 +15,7 @@ import probatio
 from homeassistant.config_entries import (
     SOURCE_REAUTH,
     ConfigEntry,
+    ConfigEntryState,
     ConfigFlowResult,
     OptionsFlowWithReload,
 )
@@ -23,7 +24,6 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.config_entry_oauth2_flow import (
     AbstractOAuth2FlowHandler,
-    async_get_config_entry_implementation,
 )
 from homeassistant.helpers.selector import (
     NumberSelector,
@@ -38,11 +38,10 @@ from homeassistant.helpers.selector import (
     TextSelectorType,
 )
 
-from .api import AuthError, AuthStrategy, TidepoolClient, TidepoolError
+from .api import AuthError, TidepoolClient, TidepoolError
 from .auth import (
     LegacyAuth,
     LegacyLoginWithdrawnError,
-    OAuthAuth,
     oauth_token_headers,
     token_user_id,
 )
@@ -320,10 +319,11 @@ class TidepoolOptionsFlow(OptionsFlowWithReload):
         """Load the accounts; offline, offer only the selected ones."""
         entry = self.config_entry
         options: list[SelectOptionDict] = []
+        client = _options_client(self.hass, entry)
         try:
-            client = await _async_entry_client(self.hass, entry)
-            assert entry.unique_id is not None
-            options = await _async_patient_options(client, entry.unique_id)
+            if client is not None:
+                assert entry.unique_id is not None
+                options = await _async_patient_options(client, entry.unique_id)
         except Exception as err:
             _LOGGER.debug(
                 "Could not load the patient list (%s); offering the selected ones",
@@ -354,18 +354,29 @@ class _TokenAuth:
         """Nothing to refresh within the flow."""
 
 
-async def _async_entry_client(
-    hass: HomeAssistant, entry: ConfigEntry
-) -> TidepoolClient:
-    """Return a client for an existing entry's login."""
+def _loaded_client(entry: ConfigEntry) -> TidepoolClient | None:
+    """Return the loaded entry's shared client (``runtime_data.client``)."""
+    if entry.state is not ConfigEntryState.LOADED:
+        return None
+    return getattr(getattr(entry, "runtime_data", None), "client", None)
+
+
+def _options_client(hass: HomeAssistant, entry: ConfigEntry) -> TidepoolClient | None:
+    """Return a client for the options flow, or ``None`` to stay offline.
+
+    Prefers the loaded entry's shared client. An OAuth entry never gets a
+    second ``OAuthAuth``: two refreshers of one rotating refresh token race,
+    and the loser's ``invalid_grant`` would start a needless reauth.
+    """
+    if (client := _loaded_client(entry)) is not None:
+        return client
+    if entry.data.get(CONF_AUTH_METHOD) != AUTH_METHOD_LEGACY:
+        return None
     session = async_get_clientsession(hass)
-    auth: AuthStrategy
-    if entry.data.get(CONF_AUTH_METHOD) == AUTH_METHOD_LEGACY:
-        auth = LegacyAuth(session, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD])
-    else:
-        implementation = await async_get_config_entry_implementation(hass, entry)
-        auth = OAuthAuth(hass, entry, implementation)
-    return TidepoolClient(session, auth)
+    return TidepoolClient(
+        session,
+        LegacyAuth(session, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD]),
+    )
 
 
 async def _async_legacy_login(auth: LegacyAuth) -> tuple[str | None, str]:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Generator
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -14,6 +15,7 @@ from homeassistant.components.application_credentials import (
     ClientCredential,
     async_import_client_credential,
 )
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType, InvalidData
 from homeassistant.helpers.selector import NumberSelector, SelectSelector
@@ -189,15 +191,21 @@ def _legacy_entry(hass: HomeAssistant, **options: Any) -> MockConfigEntry:
     return entry
 
 
-def _oauth_entry(hass: HomeAssistant) -> MockConfigEntry:
+def _oauth_entry(
+    hass: HomeAssistant,
+    *,
+    expires_at: float | None = None,
+    state: ConfigEntryState = ConfigEntryState.NOT_LOADED,
+) -> MockConfigEntry:
     token = {
         "access_token": make_unsigned_jwt({"sub": USER_ID, "jti": "old"}),
         "refresh_token": "fake-refresh-old",
         "token_type": "Bearer",
         "expires_in": 600,
-        "expires_at": time.time() + 600,
+        "expires_at": time.time() + 600 if expires_at is None else expires_at,
     }
     entry = MockConfigEntry(
+        state=state,
         domain=DOMAIN,
         unique_id=USER_ID,
         title="Fake Owner",
@@ -653,3 +661,94 @@ async def test_options_fall_back_to_selected_patients_when_offline(
     ]
     assert _schema_default(result, CONF_PATIENTS) == [USER_ID, PATIENT_ID]
     assert _schema_default(result, CONF_FAST_INTERVAL) == 7
+
+
+class _StubClient:
+    """Stands in for the loaded entry's shared client (``runtime_data.client``)."""
+
+    def __init__(self, groups: dict[str, Any], names: dict[str, str]) -> None:
+        self._groups = groups
+        self._names = names
+        self.calls: list[tuple[str, str]] = []
+
+    async def access_groups(self, user_id: str) -> dict[str, Any]:
+        self.calls.append(("access_groups", user_id))
+        return self._groups
+
+    async def profile(self, user_id: str) -> dict[str, Any]:
+        self.calls.append(("profile", user_id))
+        return {"fullName": self._names[user_id]}
+
+
+@pytest.mark.usefixtures("credentials")
+async def test_options_oauth_not_loaded_offers_selected_without_token_request(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    keycloak: MockKeycloak,
+) -> None:
+    # An expired token: building a second OAuthAuth here would refresh it and
+    # race the coordinator's refresh of the same rotating refresh token.
+    entry = _oauth_entry(hass, expires_at=time.time() - 60)
+    old_token = entry.data["token"]
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert result["type"] is FlowResultType.FORM
+    assert _select_options(result, CONF_PATIENTS) == [
+        {"value": USER_ID, "label": USER_ID},
+    ]
+    assert _schema_default(result, CONF_PATIENTS) == [USER_ID]
+    assert keycloak.token_requests == []
+    assert aioclient_mock.call_count == 0
+    assert entry.data["token"] == old_token
+
+
+async def test_options_oauth_loaded_uses_shared_client(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    entry = _oauth_entry(hass, state=ConfigEntryState.LOADED)
+    stub = _StubClient(
+        {USER_ID: {"root": {}}, PATIENT_ID: {"view": {}}},
+        {USER_ID: "Fake Owner", PATIENT_ID: "Fake Patient"},
+    )
+    entry.runtime_data = SimpleNamespace(client=stub)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert _select_options(result, CONF_PATIENTS) == [
+        {"value": USER_ID, "label": "Fake Owner"},
+        {"value": PATIENT_ID, "label": "Fake Patient"},
+    ]
+    assert stub.calls == [
+        ("access_groups", USER_ID),
+        ("profile", USER_ID),
+        ("profile", PATIENT_ID),
+    ]
+    assert aioclient_mock.call_count == 0
+
+
+async def test_options_legacy_loaded_prefers_shared_client(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=USER_ID,
+        state=ConfigEntryState.LOADED,
+        data={
+            CONF_AUTH_METHOD: "legacy",
+            "email": EMAIL,
+            "password": PASSWORD,
+            CONF_PATIENTS: [USER_ID],
+        },
+    )
+    entry.add_to_hass(hass)
+    stub = _StubClient({USER_ID: {"root": {}}}, {USER_ID: "Fake Owner"})
+    entry.runtime_data = SimpleNamespace(client=stub)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert _select_options(result, CONF_PATIENTS) == [
+        {"value": USER_ID, "label": "Fake Owner"},
+    ]
+    assert stub.calls
+    assert aioclient_mock.call_count == 0  # no second login
