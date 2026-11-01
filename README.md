@@ -221,7 +221,7 @@ Adds hourly mean, lowest and highest glucose of past days to Home Assistant's lo
 | `entry` | no | The Tidepool entry to import. All signed-in entries if left empty. |
 | `days` | no | How many days back to import, from 1 to 90 (default 14). |
 
-- The statistic is `tidepool:<id>_glucose`, one per account, named "Tidepool glucose (<patient name>)" (plain "Tidepool glucose" if the name is unknown), where `<id>` is the account's Tidepool id in lower case with other characters replaced by underscores. You can find it in **Developer tools > Statistics** and pick it in a statistics graph card.
+- The statistic is `tidepool:<id>_glucose`, one per account, named "Tidepool glucose (<patient name>)" ("Tidepool patient" if the profile has no name), where `<id>` is the account's Tidepool id in lower case with other characters replaced by underscores. You can find it in **Developer tools > Statistics** and pick it in a statistics graph card.
 - Only whole, finished hours are imported, in the Home Assistant glucose unit at the time of the import. If you change the unit system later, run the import again over the whole window so the hours are alike.
 - It is idempotent: importing the same days again replaces those hours and does not add them twice. If a run stops (for example because Tidepool limits requests), the hours already written stay and you can run it again.
 - Tidepool is read in requests of seven days each, oldest first.
@@ -259,6 +259,7 @@ What is stored, and where (all in your Home Assistant, nothing elsewhere):
 - The session token Tidepool returns at sign-in is kept in memory only.
 - Entity states and attributes (glucose, insulin, carbs and so on) in the recorder database, like any other entity, and in long-term statistics if you use `tidepool.import_history`. They are subject to your recorder settings (`recorder` includes, excludes and purge).
 - The device and entity registries hold the patient's profile name (as device name and in entity ids) and the models of the devices.
+- If you use `tidepool.import_history`, the patient's profile name is also written into the name of the long-term statistic (in the recorder database).
 - The event entities keep, in Home Assistant's restore state, the ids and times of the records they have already fired for, so that they do not fire twice after a restart.
 
 What is sent, and to whom:
