@@ -1,0 +1,6 @@
+[
+  {"type": "cbg", "id": "rec-1", "time": "2026-11-01T12:00:00Z", "value": 5.5, "units": "mmol/L"},
+  {"type": "cbg", "id": "rec-2", "time": "2026-11-01T12:05:00Z", "value": 3.9, "units": "mmol/L"},
+  {"type": "smbg", "id": "rec-3", "time": "2026-11-01T11:30:00Z", "value": 6.1, "units": "mmol/L"},
+  {"type": "basal", "id": "rec-4", "time": "2026-11-01T11:00:00Z", "rate": 0.8}
+]
