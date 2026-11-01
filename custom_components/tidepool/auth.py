@@ -5,7 +5,7 @@ password, the email and the encoded credential string are never logged and
 never appear in error messages or reprs; network errors are replaced by
 messages that carry no URL, identifier or credential.
 
-An OAuth strategy once lived here; it is kept at the ``oauth-prototype`` tag.
+OAuth sign-in was intentionally not implemented.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from .api import (
     AuthError,
     RateLimitedError,
     TidepoolError,
-    _parse_retry_after,
+    parse_retry_after,
 )
 from .const import API_URL
 
@@ -95,7 +95,7 @@ class PasswordAuth:
                 if status == 429:
                     raise RateLimitedError(
                         f"login rate limited ({status})",
-                        _parse_retry_after(response.headers.get("Retry-After")),
+                        parse_retry_after(response.headers.get("Retry-After")),
                     )
                 if status != 200:
                     raise TidepoolError(f"login failed ({status})")

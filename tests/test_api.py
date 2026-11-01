@@ -16,6 +16,7 @@ from custom_components.tidepool.api import (
     RateLimitedError,
     TidepoolClient,
     TidepoolError,
+    parse_retry_after,
 )
 from custom_components.tidepool.const import API_URL
 
@@ -186,3 +187,18 @@ async def test_other_endpoints_use_documented_paths(
     assert await client.profile(USER_ID) == {"c": 3}
     assert await client.data_sources(USER_ID) == [{"d": 4}]
     assert await client.data_sets(USER_ID) == [{"e": 5}]
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("30", 30.0),
+        ("0", 0.0),
+        ("1.5", 1.5),
+        (None, None),
+        ("-1", None),
+        ("soon", None),
+    ],
+)
+def test_parse_retry_after(header: str | None, expected: float | None) -> None:
+    assert parse_retry_after(header) == expected

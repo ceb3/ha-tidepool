@@ -96,6 +96,11 @@ def test_readme_has_no_oauth_setup() -> None:
         assert phrase not in text
 
 
+def test_code_points_at_no_local_only_tag() -> None:
+    for path in sorted(COMPONENT.rglob("*.py")):
+        assert "oauth-prototype" not in path.read_text(), path.name
+
+
 def test_docs_have_no_personal_identifiers() -> None:
     for path in _doc_paths():
         text = path.read_text().lower()

@@ -75,7 +75,7 @@ def _format_time(value: datetime) -> str:
     return value.strftime(_TOKEN_TIME_FORMAT)
 
 
-def _parse_retry_after(value: str | None) -> float | None:
+def parse_retry_after(value: str | None) -> float | None:
     """Parse a ``Retry-After`` header given in seconds."""
     if value is None:
         return None
@@ -201,7 +201,7 @@ class TidepoolClient:
                 if status == 429:
                     raise RateLimitedError(
                         f"GET {pattern} rate limited ({status})",
-                        _parse_retry_after(response.headers.get("Retry-After")),
+                        parse_retry_after(response.headers.get("Retry-After")),
                     )
                 if status == 404:
                     raise NotFoundError(f"GET {pattern} found nothing ({status})")
