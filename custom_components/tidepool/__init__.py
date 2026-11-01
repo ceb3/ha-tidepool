@@ -14,7 +14,7 @@ from .auth import LegacyAuth, OAuthAuth
 from .const import AUTH_METHOD_LEGACY, CONF_AUTH_METHOD, CONF_PATIENTS
 from .coordinator import TidepoolConfigEntry, TidepoolFastCoordinator, TidepoolRuntime
 
-PLATFORMS: list[Platform] = []
+PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: TidepoolConfigEntry) -> bool:

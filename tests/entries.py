@@ -67,6 +67,19 @@ def mock_latest(
         aioclient_mock.get(latest_url(user_id), status=status, headers=headers)
 
 
+def mock_profile(
+    aioclient_mock: AiohttpClientMocker,
+    user_id: str = USER_ID,
+    full_name: str | None = "Fake Owner",
+) -> None:
+    """Mock a user's profile; a ``None`` name means the user has no profile."""
+    url = f"{API_URL}/metadata/{user_id}/profile"
+    if full_name is None:
+        aioclient_mock.get(url, status=404)
+    else:
+        aioclient_mock.get(url, json={"fullName": full_name})
+
+
 def login_posts(aioclient_mock: AiohttpClientMocker) -> int:
     return sum(
         1

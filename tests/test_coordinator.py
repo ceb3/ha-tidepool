@@ -21,7 +21,14 @@ from custom_components.tidepool.api import RateLimitedError
 from custom_components.tidepool.coordinator import TidepoolFastCoordinator
 from custom_components.tidepool.models import Cbg
 
-from .entries import USER_ID, latest_gets, legacy_entry, mock_latest, mock_login
+from .entries import (
+    USER_ID,
+    latest_gets,
+    legacy_entry,
+    mock_latest,
+    mock_login,
+    mock_profile,
+)
 
 
 async def _loaded_coordinator(
@@ -30,6 +37,7 @@ async def _loaded_coordinator(
     entry = legacy_entry(hass, **options)
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock)
+    mock_profile(aioclient_mock)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.LOADED

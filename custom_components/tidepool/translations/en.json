@@ -74,5 +74,15 @@
     "error": {
       "no_patients": "Choose at least one account."
     }
+  },
+  "entity": {
+    "sensor": {
+      "glucose": {
+        "name": "Glucose"
+      },
+      "glucose_age": {
+        "name": "Glucose age"
+      }
+    }
   }
 }
