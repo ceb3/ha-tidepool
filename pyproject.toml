@@ -1,0 +1,25 @@
+[project]
+name = "ha-tidepool"
+version = "0.1.0"
+description = "Home Assistant custom integration for Tidepool"
+requires-python = ">=3.14"
+license = { text = "Apache-2.0" }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+target-version = "py314"
+line-length = 88
+# Standalone developer helper scripts, not part of the integration.
+extend-exclude = ["docs/dev"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["custom_components"]
