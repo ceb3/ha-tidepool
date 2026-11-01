@@ -25,6 +25,18 @@ MAX_FAST_INTERVAL: Final = 30
 # Slow refresh interval (summaries, data sources and sets, profile).
 SLOW_INTERVAL: Final = timedelta(hours=1)
 
+# Services and their fields.
+SERVICE_REFRESH: Final = "refresh"
+SERVICE_IMPORT_HISTORY: Final = "import_history"
+ATTR_ENTRY: Final = "entry"
+ATTR_DAYS: Final = "days"
+
+# History import: the default and longest window in days, and the span of one
+# request (Tidepool has no pagination, so a request's size is bounded by it).
+DEFAULT_IMPORT_DAYS: Final = 14
+MAX_IMPORT_DAYS: Final = 90
+IMPORT_CHUNK: Final = timedelta(days=7)
+
 # Shown on the email and password form through the ``disclaimer`` placeholder.
 PASSWORD_DISCLAIMER: Final = (
     "This method signs in with your Tidepool email and password using the login "

@@ -7,8 +7,10 @@ import logging
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.typing import ConfigType
 
 from .api import (
     AuthError,
@@ -18,7 +20,7 @@ from .api import (
     TidepoolError,
 )
 from .auth import PasswordAuth
-from .const import CONF_PATIENTS, DEFAULT_DEVICE_NAME
+from .const import CONF_PATIENTS, DEFAULT_DEVICE_NAME, DOMAIN
 from .coordinator import (
     TidepoolConfigEntry,
     TidepoolFastCoordinator,
@@ -26,10 +28,19 @@ from .coordinator import (
     TidepoolSlowCoordinator,
 )
 from .devices import async_setup_devices, identifiers_in_use
+from .services import async_setup_services
 
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.EVENT, Platform.SENSOR]
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the services, which belong to the integration, not to an entry."""
+    async_setup_services(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: TidepoolConfigEntry) -> bool:

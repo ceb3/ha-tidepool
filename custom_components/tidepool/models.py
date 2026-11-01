@@ -58,6 +58,22 @@ def is_number(value: Any) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool)
 
 
+def parse_glucose(record: Any) -> Cbg | None:
+    """Return a glucose record as a reading, or None if it is unusable."""
+    time = _record_time(record)
+    if time is None:
+        return None
+    value = record.get("value")
+    if not is_number(value):
+        return None
+    record_id = record.get("id")
+    return Cbg(
+        value_mmol=float(value),
+        time=time,
+        id=record_id if isinstance(record_id, str) else None,
+    )
+
+
 @dataclass
 class Latest:
     """The newest record of each type."""
@@ -66,18 +82,7 @@ class Latest:
 
     def _glucose(self, record_type: str) -> Cbg | None:
         record = self.by_type.get(record_type)
-        if record is None:
-            return None
-        time = _record_time(record)
-        value = record.get("value")
-        if time is None or not is_number(value):
-            return None
-        record_id = record.get("id")
-        return Cbg(
-            value_mmol=float(value),
-            time=time,
-            id=record_id if isinstance(record_id, str) else None,
-        )
+        return None if record is None else parse_glucose(record)
 
     @property
     def cbg(self) -> Cbg | None:

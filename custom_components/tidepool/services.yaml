@@ -1,0 +1,25 @@
+refresh:
+  fields:
+    entry:
+      required: false
+      selector:
+        config_entry:
+          integration: tidepool
+
+import_history:
+  fields:
+    entry:
+      required: false
+      selector:
+        config_entry:
+          integration: tidepool
+    days:
+      required: false
+      default: 14
+      selector:
+        number:
+          min: 1
+          max: 90
+          step: 1
+          mode: box
+          unit_of_measurement: days

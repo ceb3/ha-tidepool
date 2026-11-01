@@ -304,5 +304,66 @@
         "name": "Last water intake"
       }
     }
+  },
+  "services": {
+    "refresh": {
+      "name": "Refresh",
+      "description": "Fetches the latest Tidepool data now instead of waiting for the next scheduled refresh.",
+      "fields": {
+        "entry": {
+          "name": "Entry",
+          "description": "The Tidepool entry to refresh. All entries are refreshed if left empty."
+        }
+      }
+    },
+    "import_history": {
+      "name": "Import glucose history",
+      "description": "Adds hourly average, lowest and highest glucose of the past days to Home Assistant's long-term statistics. Importing the same days again replaces them, it does not add them twice.",
+      "fields": {
+        "entry": {
+          "name": "Entry",
+          "description": "The Tidepool entry to import. All entries are imported if left empty."
+        },
+        "days": {
+          "name": "Days",
+          "description": "How many days back to import, from 1 to 90."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "entry_not_found": {
+      "message": "There is no Tidepool entry with this id."
+    },
+    "entry_not_loaded": {
+      "message": "This Tidepool entry is not loaded."
+    },
+    "entry_auth_failed": {
+      "message": "The Tidepool sign-in of this entry was rejected. Sign in again from the entry first."
+    },
+    "no_entries": {
+      "message": "No Tidepool entry is loaded and signed in."
+    },
+    "refresh_failed": {
+      "message": "Some Tidepool data could not be refreshed. See the log for details."
+    },
+    "recorder_unavailable": {
+      "message": "The recorder is not loaded, so there is nowhere to store long-term statistics."
+    },
+    "invalid_days": {
+      "message": "Days must be a whole number from 1 to {maximum}."
+    },
+    "import_rate_limited": {
+      "message": "Tidepool is limiting requests. {hours} hours were imported before it stopped; try again later to carry on."
+    },
+    "import_failed": {
+      "message": "Tidepool could not be read. {hours} hours were imported before it stopped; try again later to carry on."
+    },
+    "auth_failed": {
+      "message": "The Tidepool sign-in was rejected. {hours} hours were imported before it stopped; sign in again from the entry."
+    },
+    "patient_access_refused": {
+      "message": "Tidepool no longer shares the data of one of the accounts. {hours} hours were imported before it stopped."
+    }
   }
 }
