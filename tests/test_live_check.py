@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import base64
 import importlib.util
-import json
 from pathlib import Path
 from types import ModuleType
 
@@ -13,9 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from pytest_homeassistant_custom_component.test_util.aiohttp import (
     AiohttpClientMocker,
-    AiohttpClientMockResponse,
 )
-from yarl import URL
 
 from custom_components.tidepool.const import API_URL
 
@@ -139,15 +135,7 @@ def test_describe_handles_scalars_and_empty(live_check: ModuleType) -> None:
     assert NAME not in live_check.describe(NAME)
 
 
-def _jwt(claims: dict) -> str:
-    def part(obj: dict) -> str:
-        raw = json.dumps(obj).encode()
-        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
-
-    return f"{part({'alg': 'none'})}.{part(claims)}.sig-uniq"
-
-
-async def test_legacy_check_output_has_no_values(
+async def test_login_check_output_has_no_values(
     hass: HomeAssistant,
     aioclient_mock: AiohttpClientMocker,
     live_check: ModuleType,
@@ -172,9 +160,7 @@ async def test_legacy_check_output_has_no_values(
     )
     aioclient_mock.get(f"{API_URL}/v1/users/{USER_ID}/data_sets", status=404)
 
-    lines = await live_check.check_legacy(
-        async_get_clientsession(hass), EMAIL, PASSWORD
-    )
+    lines = await live_check.check_login(async_get_clientsession(hass), EMAIL, PASSWORD)
     output = "\n".join(lines)
 
     assert "login" in output
@@ -194,15 +180,13 @@ async def test_legacy_check_output_has_no_values(
     assert "same structure as client.latest: yes" in output
 
 
-async def test_legacy_check_login_failure_prints_class_and_status_only(
+async def test_login_check_failure_prints_class_and_status_only(
     hass: HomeAssistant,
     aioclient_mock: AiohttpClientMocker,
     live_check: ModuleType,
 ) -> None:
     aioclient_mock.post(f"{API_URL}/auth/login", status=401)
-    lines = await live_check.check_legacy(
-        async_get_clientsession(hass), EMAIL, PASSWORD
-    )
+    lines = await live_check.check_login(async_get_clientsession(hass), EMAIL, PASSWORD)
     output = "\n".join(lines)
     assert "AuthError" in output
     assert "401" in output
@@ -210,55 +194,12 @@ async def test_legacy_check_login_failure_prints_class_and_status_only(
     assert PASSWORD not in output
 
 
-async def test_oauth_check_reports_header_names_and_claim_names_only(
-    hass: HomeAssistant,
-    aioclient_mock: AiohttpClientMocker,
-    live_check: ModuleType,
-) -> None:
-    token = _jwt({"sub": USER_ID, "email": EMAIL, "preferred_username": NAME})
-    statuses = iter([401, 200])
-
-    async def respond(method: str, url: URL, data: object) -> object:
-        return AiohttpClientMockResponse(method, url, status=next(statuses), json={})
-
-    aioclient_mock.get(f"{API_URL}/access/groups/{USER_ID}", side_effect=respond)
-
-    lines = await live_check.check_oauth(async_get_clientsession(hass), token)
-    output = "\n".join(lines)
-
-    sent = [call[3] for call in aioclient_mock.mock_calls]
-    assert "X-Tidepool-Session-Token" in sent[0]
-    assert sent[1]["Authorization"] == f"Bearer {token}"
-    assert "X-Tidepool-Session-Token: 401" in output
-    assert "Authorization Bearer: 200" in output
-    for claim in ("sub", "email", "preferred_username"):
-        assert claim in output
-    for value in (token, USER_ID, EMAIL, NAME, "sig-uniq"):
-        assert value not in output, value
-
-
-async def test_oauth_check_without_user_id_claim_makes_no_request(
-    hass: HomeAssistant,
-    aioclient_mock: AiohttpClientMocker,
-    live_check: ModuleType,
-) -> None:
-    lines = await live_check.check_oauth(
-        async_get_clientsession(hass), _jwt({"email": EMAIL})
-    )
-    assert aioclient_mock.call_count == 0
-    assert EMAIL not in "\n".join(lines)
-
-
 def test_main_without_credentials_exits_non_zero(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     live_check: ModuleType,
 ) -> None:
-    for name in (
-        "TIDEPOOL_EMAIL",
-        "TIDEPOOL_PASSWORD",
-        "TIDEPOOL_ACCESS_TOKEN",
-    ):
+    for name in ("TIDEPOOL_EMAIL", "TIDEPOOL_PASSWORD"):
         monkeypatch.delenv(name, raising=False)
     assert live_check.main() != 0
     assert "TIDEPOOL_" in capsys.readouterr().err

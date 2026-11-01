@@ -36,12 +36,12 @@ from .entries import (
     USER_ID,
     latest_gets,
     latest_url,
-    legacy_entry,
     login_posts,
     mock_latest,
     mock_login,
     mock_profile,
     mock_slow,
+    password_entry,
     window_gets,
 )
 
@@ -186,7 +186,7 @@ async def _setup(
     window: list[dict] | None = None,
 ) -> MockConfigEntry:
     freezer.move_to(NOW)
-    entry = legacy_entry(hass)
+    entry = password_entry(hass)
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock, payload=latest or [], window=window)
     mock_profile(aioclient_mock)

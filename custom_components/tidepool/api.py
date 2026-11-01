@@ -26,7 +26,7 @@ class AuthError(TidepoolError):
     """The API rejected the credentials (HTTP 401 or 403).
 
     ``status`` is the HTTP status that caused it, when there was one.
-    ``from_login`` is True when the login or token refresh itself was rejected
+    ``from_login`` is True when the login itself was rejected
     (wrong or revoked credentials), not a request made with a session.
     """
 

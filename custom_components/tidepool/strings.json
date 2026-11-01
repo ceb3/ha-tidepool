@@ -3,17 +3,6 @@
     "step": {
       "user": {
         "title": "Sign in to Tidepool",
-        "description": "Choose how to sign in to your Tidepool account.",
-        "menu_options": {
-          "oauth": "Sign in with OAuth (recommended)",
-          "legacy": "Sign in with email and password (legacy)"
-        }
-      },
-      "pick_implementation": {
-        "title": "Pick the application credentials"
-      },
-      "legacy": {
-        "title": "Sign in with email and password (legacy)",
         "description": "{disclaimer}",
         "data": {
           "email": "Email",
@@ -41,7 +30,7 @@
     },
     "error": {
       "invalid_auth": "The email or password is not correct.",
-      "legacy_withdrawn": "Tidepool's email and password login did not answer as expected. Tidepool may have changed or withdrawn it. Sign in with OAuth instead.",
+      "login_withdrawn": "Tidepool's email and password login did not answer as expected. Tidepool may have changed or restricted it.",
       "cannot_connect": "Could not reach Tidepool. Try again later.",
       "no_patients": "Choose at least one account.",
       "unknown": "Unexpected error."
@@ -49,12 +38,8 @@
     "abort": {
       "already_configured": "This Tidepool account is already configured.",
       "already_in_progress": "A sign-in for this Tidepool account is already in progress.",
-      "cannot_connect": "Could not reach Tidepool. Try again later.",
-      "no_user_id": "The sign-in did not identify a Tidepool account.",
       "wrong_account": "You signed in with a different Tidepool account. Sign in with the account this entry was set up with.",
-      "missing_configuration": "OAuth is not set up. Add application credentials for Tidepool first.",
-      "reauth_successful": "Signed in again successfully.",
-      "unknown": "Unexpected error."
+      "reauth_successful": "Signed in again successfully."
     }
   },
   "options": {

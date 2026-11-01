@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 from typing import Any
 
@@ -15,17 +14,14 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
 
 from custom_components.tidepool.const import (
     API_URL,
-    CONF_AUTH_METHOD,
     CONF_PATIENTS,
     DOMAIN,
 )
 
-from .mock_keycloak import FAKE_USER_ID, make_unsigned_jwt
-
 EMAIL = "fake.person@example.invalid"
 PASSWORD = "fake-password-hunter2"
 SESSION_TOKEN = "fake-session-token-1"
-USER_ID = FAKE_USER_ID
+USER_ID = "fake-user-0001"
 PATIENT_ID = "fake-patient-0002"
 LOGIN_URL = f"{API_URL}/auth/login"
 
@@ -180,7 +176,7 @@ def window_gets(aioclient_mock: AiohttpClientMocker, user_id: str) -> int:
     return _data_gets(aioclient_mock, user_id, "type")
 
 
-def legacy_entry(
+def password_entry(
     hass: HomeAssistant,
     patients: list[str] | None = None,
     **options: Any,
@@ -190,37 +186,11 @@ def legacy_entry(
         unique_id=USER_ID,
         title="Fake Owner",
         data={
-            CONF_AUTH_METHOD: "legacy",
             "email": EMAIL,
             "password": PASSWORD,
             CONF_PATIENTS: patients or [USER_ID],
         },
         options=options,
-    )
-    entry.add_to_hass(hass)
-    return entry
-
-
-def oauth_entry(
-    hass: HomeAssistant, patients: list[str] | None = None
-) -> MockConfigEntry:
-    token = {
-        "access_token": make_unsigned_jwt({"sub": USER_ID, "jti": "old"}),
-        "refresh_token": "fake-refresh-old",
-        "token_type": "Bearer",
-        "expires_in": 600,
-        "expires_at": time.time() + 600,
-    }
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        unique_id=USER_ID,
-        title="Fake Owner",
-        data={
-            CONF_AUTH_METHOD: "oauth",
-            "auth_implementation": DOMAIN,
-            "token": token,
-            CONF_PATIENTS: patients or [USER_ID],
-        },
     )
     entry.add_to_hass(hass)
     return entry

@@ -17,6 +17,7 @@ def test_manifest_fields() -> None:
     assert manifest["iot_class"] == "cloud_polling"
     assert manifest["integration_type"] == "service"
     assert manifest["requirements"] == []
+    assert "dependencies" not in manifest
     assert re.fullmatch(r"\d+\.\d+\.\d+", manifest["version"])
 
     hacs = json.loads((ROOT / "hacs.json").read_text())

@@ -44,13 +44,13 @@ from .entries import (
     PATIENT_ID,
     USER_ID,
     latest_gets,
-    legacy_entry,
     load_fixture,
     login_posts,
     mock_latest,
     mock_login,
     mock_profile,
     mock_slow,
+    password_entry,
     summary_gets,
 )
 
@@ -74,7 +74,7 @@ async def _setup(
     **slow: Any,
 ) -> MockConfigEntry:
     hass.config.units = units
-    entry = legacy_entry(hass, patients=patients)
+    entry = password_entry(hass, patients=patients)
     mock_login(aioclient_mock)
     for patient in patients or [USER_ID]:
         mock_latest(aioclient_mock, user_id=patient)
@@ -92,7 +92,7 @@ async def _setup_shared(
     """Set up the own account and one shared patient; only the latter's slow
     endpoints get ``shared_slow``."""
     hass.config.units = METRIC_SYSTEM
-    entry = legacy_entry(hass, patients=[USER_ID, PATIENT_ID])
+    entry = password_entry(hass, patients=[USER_ID, PATIENT_ID])
     mock_login(aioclient_mock)
     for patient in (USER_ID, PATIENT_ID):
         mock_latest(aioclient_mock, user_id=patient)
@@ -315,7 +315,7 @@ async def test_sparse_account_without_summaries_loads(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     hass.config.units = METRIC_SYSTEM
-    entry = legacy_entry(hass)
+    entry = password_entry(hass)
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock, payload=[])
     mock_profile(aioclient_mock, full_name=None)  # 404
@@ -378,7 +378,7 @@ async def test_slow_coordinator_per_patient_polls_hourly(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
     hass.config.units = METRIC_SYSTEM
-    entry = legacy_entry(hass, patients=[USER_ID, PATIENT_ID], fast_interval=2)
+    entry = password_entry(hass, patients=[USER_ID, PATIENT_ID], fast_interval=2)
     mock_login(aioclient_mock)
     for patient in (USER_ID, PATIENT_ID):
         mock_latest(aioclient_mock, user_id=patient)

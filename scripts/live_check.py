@@ -4,12 +4,11 @@
 Run from the repository root with the project venv::
 
     TIDEPOOL_EMAIL=... TIDEPOOL_PASSWORD=... .venv/bin/python scripts/live_check.py
-    TIDEPOOL_ACCESS_TOKEN=... .venv/bin/python scripts/live_check.py
 
-The output describes structure only: record types, counts, key names, HTTP
-status codes and which header an OAuth access token was accepted in. It never
-prints a value (no numbers, ids, names, emails, timestamps or tokens) and never
-prints an exception message, only the exception class and HTTP status.
+The output describes structure only: record types, counts, key names and HTTP
+status codes. It never prints a value (no numbers, ids, names, emails,
+timestamps or tokens) and never prints an exception message, only the exception
+class and HTTP status.
 """
 
 from __future__ import annotations
@@ -32,11 +31,7 @@ from custom_components.tidepool.api import (
     RateLimitedError,
     TidepoolClient,
 )
-from custom_components.tidepool.auth import (
-    LegacyAuth,
-    _unverified_jwt_claims,
-    extract_user_id,
-)
+from custom_components.tidepool.auth import PasswordAuth
 from custom_components.tidepool.const import API_URL
 
 FAILED = "FAILED"
@@ -65,7 +60,6 @@ _KEY_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,39}")
 _HEX_ID = re.compile(r"[0-9a-f]{8,}")
 _MAX_DEPTH = 6
 _OTHER = "<other>"
-_TOKEN_HEADER = "X-Tidepool-Session-Token"
 
 
 def _kind(value: Any) -> str:
@@ -204,15 +198,15 @@ async def _raw_get(
         return None, None
 
 
-async def check_legacy(
+async def check_login(
     session: aiohttp.ClientSession,
     email: str,
     password: str,
     base_url: str = API_URL,
 ) -> list[str]:
-    """Log in with the project's own LegacyAuth and read through the client."""
+    """Log in with the project's own PasswordAuth and read through the client."""
     lines: list[str] = []
-    auth = LegacyAuth(session, email, password, base_url)
+    auth = PasswordAuth(session, email, password, base_url)
     client = TidepoolClient(session, auth, base_url)
 
     try:
@@ -258,65 +252,23 @@ async def check_legacy(
     return lines
 
 
-async def check_oauth(
-    session: aiohttp.ClientSession, token: str, base_url: str = API_URL
-) -> list[str]:
-    """Find out which header the API accepts an OAuth access token in."""
-    claims = _unverified_jwt_claims(token)
-    if claims is None:
-        return [f"access token: {FAILED} not a decodable JWT"]
-    names = sorted(name for name in claims if _is_key_name(name))
-    lines = [f"token claims: {', '.join(names) if names else 'none'}"]
-    user_id = extract_user_id(claims)
-    if user_id is None:
-        lines.append(f"user id claim: {FAILED} none of userid, user_id, sub")
-        return lines
-    id_claim = next(c for c in ("userid", "user_id", "sub") if claims.get(c))
-    lines.append(f"user id claim: {id_claim}")
-
-    probes = {
-        _TOKEN_HEADER: {_TOKEN_HEADER: token},
-        "Authorization Bearer": {"Authorization": f"Bearer {token}"},
-    }
-    accepted = []
-    for name, headers in probes.items():
-        status, _ = await _raw_get(
-            session, f"{base_url}/access/groups/{user_id}", headers
-        )
-        lines.append(f"{name}: {status if status else FAILED}")
-        if status is not None and 200 <= status < 300:
-            accepted.append(name)
-    lines.append(f"accepted in: {', '.join(accepted) if accepted else 'neither'}")
-    return lines
-
-
-async def _run(email: str | None, password: str | None, token: str | None) -> int:
+async def _run(email: str, password: str) -> int:
     timeout = aiohttp.ClientTimeout(total=30)
-    lines: list[str] = []
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        if email and password:
-            lines.append("== legacy login ==")
-            lines.extend(await check_legacy(session, email, password))
-        if token:
-            lines.append("== oauth access token ==")
-            lines.extend(await check_oauth(session, token.strip()))
+        lines = ["== email and password login =="]
+        lines.extend(await check_login(session, email, password))
     print("\n".join(lines))
     return 1 if any(FAILED in line for line in lines) else 0
 
 
 def main() -> int:
-    """Run the checks the environment has credentials for."""
+    """Run the check when the environment has credentials."""
     email = os.environ.get("TIDEPOOL_EMAIL")
     password = os.environ.get("TIDEPOOL_PASSWORD")
-    token = os.environ.get("TIDEPOOL_ACCESS_TOKEN")
-    if not ((email and password) or token):
-        print(
-            "Set TIDEPOOL_EMAIL and TIDEPOOL_PASSWORD (legacy login) or "
-            "TIDEPOOL_ACCESS_TOKEN (OAuth spike).",
-            file=sys.stderr,
-        )
+    if not (email and password):
+        print("Set TIDEPOOL_EMAIL and TIDEPOOL_PASSWORD.", file=sys.stderr)
         return 2
-    return asyncio.run(_run(email, password, token))
+    return asyncio.run(_run(email, password))
 
 
 if __name__ == "__main__":

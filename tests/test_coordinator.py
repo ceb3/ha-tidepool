@@ -24,11 +24,11 @@ from custom_components.tidepool.models import Cbg
 from .entries import (
     USER_ID,
     latest_gets,
-    legacy_entry,
     mock_latest,
     mock_login,
     mock_profile,
     mock_slow,
+    password_entry,
     window_gets,
 )
 
@@ -36,7 +36,7 @@ from .entries import (
 async def _loaded_coordinator(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, **options
 ) -> tuple[MockConfigEntry, TidepoolFastCoordinator]:
-    entry = legacy_entry(hass, **options)
+    entry = password_entry(hass, **options)
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock)
     mock_profile(aioclient_mock)

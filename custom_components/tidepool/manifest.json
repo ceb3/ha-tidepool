@@ -3,7 +3,6 @@
   "name": "Tidepool",
   "codeowners": ["@ceb3"],
   "config_flow": true,
-  "dependencies": ["application_credentials"],
   "after_dependencies": ["recorder"],
   "documentation": "https://github.com/ceb3/ha-tidepool",
   "integration_type": "service",

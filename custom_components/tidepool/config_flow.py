@@ -1,4 +1,4 @@
-"""Config flow for Tidepool: OAuth or legacy sign-in, patients, reauth, options.
+"""Config flow for Tidepool: email and password sign-in, patients, reauth, options.
 
 Email, password, tokens and user ids never appear in logs, error text or
 description placeholders. A patient label may show the account's display name.
@@ -8,23 +8,20 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from typing import Any, override
+from typing import Any
 
 import aiohttp
 import probatio
 from homeassistant.config_entries import (
-    SOURCE_REAUTH,
     ConfigEntry,
     ConfigEntryState,
+    ConfigFlow,
     ConfigFlowResult,
     OptionsFlowWithReload,
 )
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.config_entry_oauth2_flow import (
-    AbstractOAuth2FlowHandler,
-)
 from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
@@ -39,23 +36,15 @@ from homeassistant.helpers.selector import (
 )
 
 from .api import AuthError, TidepoolClient, TidepoolError
-from .auth import (
-    LegacyAuth,
-    LegacyLoginWithdrawnError,
-    oauth_token_headers,
-    token_user_id,
-)
+from .auth import LoginWithdrawnError, PasswordAuth
 from .const import (
-    AUTH_METHOD_LEGACY,
-    AUTH_METHOD_OAUTH,
-    CONF_AUTH_METHOD,
     CONF_FAST_INTERVAL,
     CONF_PATIENTS,
     DEFAULT_FAST_INTERVAL,
     DOMAIN,
-    LEGACY_DISCLAIMER,
     MAX_FAST_INTERVAL,
     MIN_FAST_INTERVAL,
+    PASSWORD_DISCLAIMER,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -70,10 +59,9 @@ _PASSWORD_SELECTOR = TextSelector(
 )
 
 
-class TidepoolConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
-    """Set up a Tidepool login with OAuth (recommended) or email and password."""
+class TidepoolConfigFlow(ConfigFlow, domain=DOMAIN):
+    """Set up a Tidepool login with email and password."""
 
-    DOMAIN = DOMAIN
     VERSION = 1
 
     def __init__(self) -> None:
@@ -82,44 +70,23 @@ class TidepoolConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
         self._patient_options: list[SelectOptionDict] = []
         self._title = DEFAULT_TITLE
 
-    @property
-    @override
-    def logger(self) -> logging.Logger:
-        """Return the logger of this flow."""
-        return _LOGGER
-
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> TidepoolOptionsFlow:
         """Return the options flow."""
         return TidepoolOptionsFlow()
 
-    @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Let the user pick the sign-in method."""
-        return self.async_show_menu(
-            step_id="user", menu_options=[AUTH_METHOD_OAUTH, AUTH_METHOD_LEGACY]
-        )
-
-    async def async_step_oauth(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Sign in with OAuth through the application credentials."""
-        return await self.async_step_pick_implementation()
-
-    async def async_step_legacy(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Sign in with email and password (legacy, shows the disclaimer)."""
+        """Sign in with email and password (shows the disclaimer)."""
         errors: dict[str, str] = {}
         if user_input is not None:
             email = user_input[CONF_EMAIL]
             password = user_input[CONF_PASSWORD]
             session = async_get_clientsession(self.hass)
-            auth = LegacyAuth(session, email, password)
-            user_id, error = await _async_legacy_login(auth)
+            auth = PasswordAuth(session, email, password)
+            user_id, error = await _async_login(auth)
             if user_id is None:
                 errors["base"] = error
             else:
@@ -131,11 +98,7 @@ class TidepoolConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
                 if error is not None:
                     errors["base"] = error
                 else:
-                    self._data = {
-                        CONF_AUTH_METHOD: AUTH_METHOD_LEGACY,
-                        CONF_EMAIL: email,
-                        CONF_PASSWORD: password,
-                    }
+                    self._data = {CONF_EMAIL: email, CONF_PASSWORD: password}
                     return await self.async_step_patients()
 
         schema = probatio.Schema(
@@ -149,34 +112,11 @@ class TidepoolConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
                 schema, {CONF_EMAIL: user_input[CONF_EMAIL]}
             )
         return self.async_show_form(
-            step_id="legacy",
+            step_id="user",
             data_schema=schema,
             errors=errors,
-            description_placeholders={"disclaimer": LEGACY_DISCLAIMER},
+            description_placeholders={"disclaimer": PASSWORD_DISCLAIMER},
         )
-
-    @override
-    async def async_oauth_create_entry(self, data: dict) -> ConfigFlowResult:
-        """Identify the login from the token, then pick patients or reauth."""
-        token = data["token"]
-        user_id = token_user_id(token)
-        if user_id is None:
-            return self.async_abort(reason="no_user_id")
-
-        await self.async_set_unique_id(user_id)
-        if self.source == SOURCE_REAUTH:
-            self._abort_if_unique_id_mismatch(reason="wrong_account")
-            return self.async_update_reload_and_abort(
-                self._get_reauth_entry(), data_updates=data
-            )
-        self._abort_if_unique_id_configured()
-
-        session = async_get_clientsession(self.hass)
-        client = TidepoolClient(session, _TokenAuth(token["access_token"]))
-        if (error := await self._async_load_patients(client, user_id)) is not None:
-            return self.async_abort(reason=error)
-        self._data = {CONF_AUTH_METHOD: AUTH_METHOD_OAUTH, **data}
-        return await self.async_step_patients()
 
     async def async_step_patients(
         self, user_input: dict[str, Any] | None = None
@@ -212,26 +152,15 @@ class TidepoolConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Ask for a new password (legacy) or sign in again (OAuth)."""
+        """Ask for a new password."""
         entry = self._get_reauth_entry()
-        if entry.data.get(CONF_AUTH_METHOD) == AUTH_METHOD_LEGACY:
-            return await self._async_reauth_legacy(entry, user_input)
-        if user_input is None:
-            return self.async_show_form(step_id="reauth_confirm")
-        return await self.async_step_pick_implementation(
-            {"implementation": entry.data["auth_implementation"]}
-        )
-
-    async def _async_reauth_legacy(
-        self, entry: ConfigEntry, user_input: dict[str, Any] | None
-    ) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
             password = user_input[CONF_PASSWORD]
-            auth = LegacyAuth(
+            auth = PasswordAuth(
                 async_get_clientsession(self.hass), entry.data[CONF_EMAIL], password
             )
-            user_id, error = await _async_legacy_login(auth)
+            user_id, error = await _async_login(auth)
             if user_id is None:
                 errors["base"] = error
             else:
@@ -321,9 +250,8 @@ class TidepoolOptionsFlow(OptionsFlowWithReload):
         options: list[SelectOptionDict] = []
         client = _options_client(self.hass, entry)
         try:
-            if client is not None:
-                assert entry.unique_id is not None
-                options = await _async_patient_options(client, entry.unique_id)
+            assert entry.unique_id is not None
+            options = await _async_patient_options(client, entry.unique_id)
         except Exception as err:
             _LOGGER.debug(
                 "Could not load the patient list (%s); offering the selected ones",
@@ -338,22 +266,6 @@ class TidepoolOptionsFlow(OptionsFlowWithReload):
         return options
 
 
-class _TokenAuth:
-    """Auth from a just-issued OAuth access token, used only inside the flow."""
-
-    def __init__(self, access_token: str) -> None:
-        self._access_token = access_token
-
-    def __repr__(self) -> str:
-        return f"<{type(self).__name__}>"
-
-    async def async_headers(self) -> dict[str, str]:
-        return oauth_token_headers(self._access_token)
-
-    async def async_invalidate(self) -> None:
-        """Nothing to refresh within the flow."""
-
-
 def _loaded_client(entry: ConfigEntry) -> TidepoolClient | None:
     """Return the loaded entry's shared client (``runtime_data.client``)."""
     if entry.state is not ConfigEntryState.LOADED:
@@ -361,32 +273,29 @@ def _loaded_client(entry: ConfigEntry) -> TidepoolClient | None:
     return getattr(getattr(entry, "runtime_data", None), "client", None)
 
 
-def _options_client(hass: HomeAssistant, entry: ConfigEntry) -> TidepoolClient | None:
-    """Return a client for the options flow, or ``None`` to stay offline.
+def _options_client(hass: HomeAssistant, entry: ConfigEntry) -> TidepoolClient:
+    """Return a client for the options flow.
 
-    Prefers the loaded entry's shared client. An OAuth entry never gets a
-    second ``OAuthAuth``: two refreshers of one rotating refresh token race,
-    and the loser's ``invalid_grant`` would start a needless reauth.
+    Prefers the loaded entry's shared client, so the options flow does not log
+    in a second time.
     """
     if (client := _loaded_client(entry)) is not None:
         return client
-    if entry.data.get(CONF_AUTH_METHOD) != AUTH_METHOD_LEGACY:
-        return None
     session = async_get_clientsession(hass)
     return TidepoolClient(
         session,
-        LegacyAuth(session, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD]),
+        PasswordAuth(session, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD]),
     )
 
 
-async def _async_legacy_login(auth: LegacyAuth) -> tuple[str | None, str]:
+async def _async_login(auth: PasswordAuth) -> tuple[str | None, str]:
     """Log in once; return the user id, or ``None`` and an error key."""
     try:
         await auth.async_headers()
     except Exception as err:
         return None, _error_key(err)
     if auth.user_id is None:
-        return None, "legacy_withdrawn"
+        return None, "login_withdrawn"
     return auth.user_id, ""
 
 
@@ -420,8 +329,8 @@ def _patients_selector(options: list[SelectOptionDict]) -> SelectSelector:
 
 def _error_key(err: Exception) -> str:
     """Map a sign-in or API failure to a form error key (never logs details)."""
-    if isinstance(err, LegacyLoginWithdrawnError):
-        return "legacy_withdrawn"
+    if isinstance(err, LoginWithdrawnError):
+        return "login_withdrawn"
     if isinstance(err, AuthError):
         return "invalid_auth"
     if isinstance(err, TidepoolError | aiohttp.ClientError | TimeoutError):

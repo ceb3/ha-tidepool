@@ -8,9 +8,6 @@ from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.config_entry_oauth2_flow import (
-    async_get_config_entry_implementation,
-)
 
 from .api import (
     AuthError,
@@ -19,13 +16,8 @@ from .api import (
     TidepoolClient,
     TidepoolError,
 )
-from .auth import LegacyAuth, OAuthAuth
-from .const import (
-    AUTH_METHOD_LEGACY,
-    CONF_AUTH_METHOD,
-    CONF_PATIENTS,
-    DEFAULT_DEVICE_NAME,
-)
+from .auth import PasswordAuth
+from .const import CONF_PATIENTS, DEFAULT_DEVICE_NAME
 from .coordinator import (
     TidepoolConfigEntry,
     TidepoolFastCoordinator,
@@ -40,9 +32,7 @@ PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.SENSOR]
 
 async def async_setup_entry(hass: HomeAssistant, entry: TidepoolConfigEntry) -> bool:
     """Set up Tidepool from a config entry."""
-    client = TidepoolClient(
-        async_get_clientsession(hass), await _async_auth_strategy(hass, entry)
-    )
+    client = TidepoolClient(async_get_clientsession(hass), _auth_strategy(hass, entry))
     runtime = TidepoolRuntime(client=client, fast={}, slow={})
     # Coordinators read the shared auth flag from the runtime while refreshing.
     entry.runtime_data = runtime
@@ -93,12 +83,14 @@ async def _async_name_patient(runtime: TidepoolRuntime, user_id: str) -> None:
         runtime.names[user_id] = DEFAULT_DEVICE_NAME
 
 
-async def _async_auth_strategy(
-    hass: HomeAssistant, entry: TidepoolConfigEntry
-) -> AuthStrategy:
-    """Create the entry's one auth strategy, shared by all its coordinators."""
-    session = async_get_clientsession(hass)
-    if entry.data[CONF_AUTH_METHOD] == AUTH_METHOD_LEGACY:
-        return LegacyAuth(session, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD])
-    implementation = await async_get_config_entry_implementation(hass, entry)
-    return OAuthAuth(hass, entry, implementation)
+def _auth_strategy(hass: HomeAssistant, entry: TidepoolConfigEntry) -> AuthStrategy:
+    """Create the entry's one auth strategy, shared by all its coordinators.
+
+    Entries made by older versions may carry an ``auth_method`` key; it is
+    ignored, since email and password is the only sign-in.
+    """
+    return PasswordAuth(
+        async_get_clientsession(hass),
+        entry.data[CONF_EMAIL],
+        entry.data[CONF_PASSWORD],
+    )

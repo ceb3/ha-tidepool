@@ -33,12 +33,12 @@ from .entries import (
     PATIENT_ID,
     USER_ID,
     latest_gets,
-    legacy_entry,
     login_posts,
     mock_latest,
     mock_login,
     mock_profile,
     mock_slow,
+    password_entry,
 )
 
 READING = {"type": "cbg", "id": "rec-1", "time": "2026-11-01T12:00:00Z", "value": 5.5}
@@ -54,7 +54,7 @@ async def _setup(
     patients: list[str] | None = None,
 ) -> MockConfigEntry:
     hass.config.units = units
-    entry = legacy_entry(hass, patients=patients)
+    entry = password_entry(hass, patients=patients)
     mock_login(aioclient_mock)
     for patient in patients or [USER_ID]:
         mock_latest(aioclient_mock, user_id=patient, payload=payload)
@@ -191,7 +191,7 @@ async def _setup_with_profiles(
     **second_profile: Any,
 ) -> MockConfigEntry:
     """Set up two patients; the first has a good profile, the second as given."""
-    entry = legacy_entry(hass, patients=[USER_ID, PATIENT_ID])
+    entry = password_entry(hass, patients=[USER_ID, PATIENT_ID])
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock, USER_ID)
     mock_latest(aioclient_mock, PATIENT_ID)

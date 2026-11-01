@@ -8,14 +8,9 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from homeassistant.components.application_credentials import (
-    ClientCredential,
-    async_import_client_credential,
-)
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import UpdateFailed
-from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.test_util.aiohttp import (
     AiohttpClientMocker,
@@ -24,8 +19,8 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
 from yarl import URL
 
 from custom_components.tidepool.api import TidepoolClient
-from custom_components.tidepool.auth import LegacyAuth, OAuthAuth
-from custom_components.tidepool.const import DOMAIN, OAUTH_TOKEN_HEADER
+from custom_components.tidepool.auth import PasswordAuth
+from custom_components.tidepool.const import DOMAIN
 from custom_components.tidepool.coordinator import (
     TidepoolFastCoordinator,
     TidepoolRuntime,
@@ -40,7 +35,6 @@ from .entries import (
     USER_ID,
     latest_gets,
     latest_url,
-    legacy_entry,
     load_fixture,
     login_posts,
     mock_latest,
@@ -48,10 +42,9 @@ from .entries import (
     mock_profile,
     mock_slow,
     mock_window,
-    oauth_entry,
+    password_entry,
     window_gets,
 )
-from .mock_keycloak import MockKeycloak
 
 SECRETS = (EMAIL, PASSWORD, SESSION_TOKEN, USER_ID, PATIENT_ID)
 
@@ -75,7 +68,7 @@ def _reauth_flows(hass: HomeAssistant) -> list[dict]:
 async def test_setup_and_unload_entry(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
-    entry = legacy_entry(hass, patients=[USER_ID, PATIENT_ID])
+    entry = password_entry(hass, patients=[USER_ID, PATIENT_ID])
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock, USER_ID)
     mock_profile(aioclient_mock, USER_ID)
@@ -113,7 +106,7 @@ async def test_setup_and_unload_entry(
 async def test_options_override_patients_and_interval(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
-    entry = legacy_entry(hass, patients=[USER_ID])
+    entry = password_entry(hass, patients=[USER_ID])
     hass.config_entries.async_update_entry(
         entry, options={"patients": [PATIENT_ID], "fast_interval": 10}
     )
@@ -132,72 +125,62 @@ async def test_options_override_patients_and_interval(
     assert latest_gets(aioclient_mock, USER_ID) == 0
 
 
-@pytest.fixture
-async def credentials(hass: HomeAssistant) -> None:
-    assert await async_setup_component(hass, "application_credentials", {})
-    await async_import_client_credential(
-        hass, DOMAIN, ClientCredential("fake-client-id-xyz", "")
-    )
-
-
-@pytest.mark.usefixtures("credentials")
-async def test_one_auth_strategy_per_entry_oauth(
+async def test_entry_uses_password_auth(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
-    keycloak = MockKeycloak(aioclient_mock)
-    entry = oauth_entry(hass, patients=[USER_ID, PATIENT_ID])
-    mock_latest(aioclient_mock, USER_ID)
-    mock_profile(aioclient_mock, USER_ID)
-    mock_slow(aioclient_mock, USER_ID)
-    mock_latest(aioclient_mock, PATIENT_ID)
-    mock_profile(aioclient_mock, PATIENT_ID)
-    mock_slow(aioclient_mock, PATIENT_ID)
+    entry = password_entry(hass, patients=[USER_ID, PATIENT_ID])
+    mock_login(aioclient_mock)
+    for user_id in (USER_ID, PATIENT_ID):
+        mock_latest(aioclient_mock, user_id)
+        mock_profile(aioclient_mock, user_id)
+        mock_slow(aioclient_mock, user_id)
 
-    with (
-        patch(
-            "custom_components.tidepool.OAuthAuth", side_effect=OAuthAuth
-        ) as oauth_cls,
-        patch("custom_components.tidepool.LegacyAuth") as legacy_cls,
-    ):
+    with patch(
+        "custom_components.tidepool.PasswordAuth", side_effect=PasswordAuth
+    ) as auth_cls:
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
     assert entry.state is ConfigEntryState.LOADED
-    assert oauth_cls.call_count == 1
-    assert legacy_cls.call_count == 0
-    _, called_entry, _ = oauth_cls.call_args.args
-    assert called_entry is entry
+    # One strategy per entry, shared by the client of every coordinator.
+    assert auth_cls.call_count == 1
     runtime = entry.runtime_data
     assert len(runtime.fast) == 2
-    # Every coordinator shares the entry's one client and its one OAuthAuth.
     for coordinator in runtime.fast.values():
         assert coordinator.client is runtime.client
-    assert isinstance(runtime.client._auth, OAuthAuth)
-    # The stored token was still valid: no refresh, and it authenticated the API.
-    assert keycloak.token_requests == []
-    data_calls = [
-        call for call in aioclient_mock.mock_calls if "/data/" in str(call[1])
-    ]
-    assert len(data_calls) == 4  # latest and the 24 h window, per patient
-    for call in data_calls:
-        assert call[3][OAUTH_TOKEN_HEADER] == entry.data["token"]["access_token"]
+    assert isinstance(runtime.client._auth, PasswordAuth)
 
 
-async def test_legacy_entry_uses_legacy_auth(
+async def test_entry_from_older_version_with_auth_method_still_loads(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
-    entry = legacy_entry(hass)
+    """An entry made by an earlier version, with auth_method, loads unchanged."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=USER_ID,
+        title="Fake Owner",
+        data={
+            "auth_method": "legacy",
+            "email": EMAIL,
+            "password": PASSWORD,
+            "patients": [USER_ID],
+        },
+    )
+    entry.add_to_hass(hass)
+    data_before = dict(entry.data)
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock)
     mock_profile(aioclient_mock)
     mock_slow(aioclient_mock)
 
-    with patch("custom_components.tidepool.OAuthAuth") as oauth_cls:
-        assert await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
 
-    assert oauth_cls.call_count == 0
-    assert isinstance(entry.runtime_data.client._auth, LegacyAuth)
+    assert entry.state is ConfigEntryState.LOADED
+    assert isinstance(entry.runtime_data.client._auth, PasswordAuth)
+    assert login_posts(aioclient_mock) == 1
+    assert entry.version == 1
+    assert dict(entry.data) == data_before
 
 
 async def test_auth_error_triggers_reauth(
@@ -206,7 +189,7 @@ async def test_auth_error_triggers_reauth(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.DEBUG)
-    entry = legacy_entry(hass, patients=[USER_ID, PATIENT_ID])
+    entry = password_entry(hass, patients=[USER_ID, PATIENT_ID])
     mock_login(aioclient_mock, status=401)
 
     assert not await hass.config_entries.async_setup(entry.entry_id)
@@ -238,7 +221,7 @@ async def test_wrong_password_one_login_attempt_for_two_patients(
     setup case is covered by ``test_auth_error_triggers_reauth``.)
     """
     caplog.set_level(logging.DEBUG)
-    entry = legacy_entry(hass, patients=[USER_ID, PATIENT_ID])
+    entry = password_entry(hass, patients=[USER_ID, PATIENT_ID])
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock, USER_ID)
     mock_profile(aioclient_mock, USER_ID)
@@ -279,7 +262,7 @@ async def test_account_with_no_data_loads(
     aioclient_mock: AiohttpClientMocker,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    entry = legacy_entry(hass)
+    entry = password_entry(hass)
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock, payload=[])
     mock_profile(aioclient_mock)
@@ -307,7 +290,7 @@ async def test_account_with_no_data_loads(
 async def _load_two_patients(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> MockConfigEntry:
-    entry = legacy_entry(hass, patients=[USER_ID, PATIENT_ID])
+    entry = password_entry(hass, patients=[USER_ID, PATIENT_ID])
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock, USER_ID)
     mock_profile(aioclient_mock, USER_ID)
@@ -343,7 +326,7 @@ def _mock_latest_sequence(
 async def test_expired_session_relogs_in_silently(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
-    entry = legacy_entry(hass)
+    entry = password_entry(hass)
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock)
     mock_profile(aioclient_mock)
@@ -373,7 +356,7 @@ async def test_expired_session_relogs_in_silently(
 async def test_get_401_twice_triggers_reauth(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
-    entry = legacy_entry(hass)
+    entry = password_entry(hass)
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock)
     mock_profile(aioclient_mock)
