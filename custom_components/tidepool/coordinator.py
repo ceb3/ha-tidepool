@@ -5,6 +5,9 @@ config entry share the entry's single ``TidepoolClient`` (and so its single
 auth strategy), and the same handling of refused or rate limited requests.
 Log messages carry no user id, token, email or password: the coordinator name
 is generic and API error messages only contain path patterns.
+
+A withdrawn sign-in raises a repair issue for the entry, which the next
+successful refresh clears.
 """
 
 from __future__ import annotations
@@ -16,9 +19,13 @@ from datetime import timedelta
 from typing import override
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.update_coordinator import (
+    TimestampDataUpdateCoordinator,
+    UpdateFailed,
+)
 from homeassistant.util import dt as dt_util
 
 from .api import (
@@ -28,10 +35,13 @@ from .api import (
     TidepoolClient,
     TidepoolError,
 )
+from .auth import LoginWithdrawnError
 from .const import (
     CONF_FAST_INTERVAL,
     DEFAULT_FAST_INTERVAL,
     DOMAIN,
+    ISSUE_LOGIN_WITHDRAWN,
+    SIGN_IN_DOCS_URL,
     SLOW_INTERVAL,
 )
 from .models import (
@@ -98,11 +108,40 @@ class TidepoolRuntime:
 type TidepoolConfigEntry = ConfigEntry[TidepoolRuntime]
 
 
+def login_withdrawn_issue_id(entry_id: str) -> str:
+    return f"{ISSUE_LOGIN_WITHDRAWN}_{entry_id}"
+
+
+@callback
+def async_raise_login_withdrawn(hass: HomeAssistant, entry_id: str) -> None:
+    """Raise (or keep) the entry's repair issue: the sign-in is withdrawn.
+
+    Nothing in Home Assistant fixes it, so it is not fixable; it links to the
+    docs instead. The placeholders carry nothing about the account.
+    """
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        login_withdrawn_issue_id(entry_id),
+        is_fixable=False,
+        severity=ir.IssueSeverity.ERROR,
+        translation_key=ISSUE_LOGIN_WITHDRAWN,
+        translation_placeholders={"docs_url": SIGN_IN_DOCS_URL},
+        learn_more_url=SIGN_IN_DOCS_URL,
+    )
+
+
+@callback
+def async_clear_login_withdrawn(hass: HomeAssistant, entry_id: str) -> None:
+    """Delete the entry's repair issue, if there is one."""
+    ir.async_delete_issue(hass, DOMAIN, login_withdrawn_issue_id(entry_id))
+
+
 class _Withheld(Exception):
     """A shared patient's sharing does not include an optional resource."""
 
 
-class TidepoolCoordinator[DataT](DataUpdateCoordinator[DataT]):
+class TidepoolCoordinator[DataT](TimestampDataUpdateCoordinator[DataT]):
     """A coordinator of one patient that maps API failures to Home Assistant's.
 
     Subclasses fetch in ``_async_fetch``, calling the API through ``_call`` so
@@ -144,8 +183,12 @@ class TidepoolCoordinator[DataT](DataUpdateCoordinator[DataT]):
         if runtime.auth_failed:
             raise ConfigEntryAuthFailed("Tidepool credentials were rejected")
         self._retried = False
+        entry_id = self.config_entry.entry_id
         try:
-            return await self._async_fetch()
+            data = await self._async_fetch()
+        except LoginWithdrawnError as err:
+            async_raise_login_withdrawn(self.hass, entry_id)
+            raise UpdateFailed(str(err)) from err
         except AuthError as err:
             if err.status == 403 and self.user_id != self.client.user_id:
                 # Access to one shared patient was withdrawn; the login itself
@@ -159,6 +202,9 @@ class TidepoolCoordinator[DataT](DataUpdateCoordinator[DataT]):
             ) from err
         except TidepoolError as err:
             raise UpdateFailed(str(err)) from err
+        # The request worked, so signing in works (again).
+        async_clear_login_withdrawn(self.hass, entry_id)
+        return data
 
     async def _call[T](
         self, request: Callable[[], Awaitable[T]], *, retry_403: bool = True
@@ -189,8 +235,9 @@ class TidepoolCoordinator[DataT](DataUpdateCoordinator[DataT]):
     ) -> T:
         """Make a request whose failure must not hide the rest of the refresh.
 
-        A missing resource or a failing server leaves the default. Refusals and
-        rate limits still count: they say something about the whole refresh.
+        A missing resource or a failing server leaves the default. Refusals,
+        rate limits and a withdrawn sign-in still count: they say something
+        about the whole refresh.
         With ``withhold`` a 403 is not one of them (the patient's sharing just
         does not include this): it is not retried, so costs no extra login, and
         raises ``_Withheld``.
@@ -201,7 +248,7 @@ class TidepoolCoordinator[DataT](DataUpdateCoordinator[DataT]):
             if withhold and err.status == 403 and not err.from_login:
                 raise _Withheld from err
             raise
-        except RateLimitedError:
+        except RateLimitedError, LoginWithdrawnError:
             raise
         except TidepoolError as err:
             _LOGGER.debug("An optional request failed: %s", err)

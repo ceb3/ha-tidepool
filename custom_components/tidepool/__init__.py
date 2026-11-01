@@ -26,6 +26,7 @@ from .coordinator import (
     TidepoolFastCoordinator,
     TidepoolRuntime,
     TidepoolSlowCoordinator,
+    async_clear_login_withdrawn,
 )
 from .devices import async_setup_devices, identifiers_in_use
 from .services import async_setup_services
@@ -70,8 +71,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: TidepoolConfigEntry) -> 
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: TidepoolConfigEntry) -> bool:
-    """Unload a config entry; its coordinators shut down with it."""
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    """Unload a config entry; its coordinators shut down with it.
+
+    The repair issue goes too: the next setup raises it again if the sign-in
+    is still withdrawn.
+    """
+    if unloaded := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        async_clear_login_withdrawn(hass, entry.entry_id)
+    return unloaded
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: TidepoolConfigEntry) -> None:
+    """Delete the repair issue of a removed entry.
+
+    An entry that never loaded (setup retrying) is not unloaded through
+    ``async_unload_entry``, so its issue would outlive it.
+    """
+    async_clear_login_withdrawn(hass, entry.entry_id)
 
 
 async def async_remove_config_entry_device(

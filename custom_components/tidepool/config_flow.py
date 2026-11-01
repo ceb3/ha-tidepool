@@ -1,4 +1,4 @@
-"""Config flow for Tidepool: email and password sign-in, patients, reauth, options.
+"""Config flow for Tidepool: sign-in, patients, reauth, reconfigure and options.
 
 Email, password, tokens and user ids never appear in logs, error text or
 description placeholders. A patient label may show the account's display name.
@@ -101,12 +101,7 @@ class TidepoolConfigFlow(ConfigFlow, domain=DOMAIN):
                     self._data = {CONF_EMAIL: email, CONF_PASSWORD: password}
                     return await self.async_step_patients()
 
-        schema = probatio.Schema(
-            {
-                probatio.Required(CONF_EMAIL): _EMAIL_SELECTOR,
-                probatio.Required(CONF_PASSWORD): _PASSWORD_SELECTOR,
-            }
-        )
+        schema = _credentials_schema()
         if user_input is not None:
             schema = self.add_suggested_values_to_schema(
                 schema, {CONF_EMAIL: user_input[CONF_EMAIL]}
@@ -176,6 +171,40 @@ class TidepoolConfigFlow(ConfigFlow, domain=DOMAIN):
                 {probatio.Required(CONF_PASSWORD): _PASSWORD_SELECTOR}
             ),
             errors=errors,
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Change the email and password of the entry's Tidepool account.
+
+        The new sign-in must be the same account (the unique id), so every
+        device and entity stays as it is; the entry reloads with it.
+        """
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        email = entry.data[CONF_EMAIL]
+        if user_input is not None:
+            email = user_input[CONF_EMAIL]
+            password = user_input[CONF_PASSWORD]
+            auth = PasswordAuth(async_get_clientsession(self.hass), email, password)
+            user_id, error = await _async_login(auth)
+            if user_id is None:
+                errors["base"] = error
+            else:
+                await self.async_set_unique_id(user_id)
+                self._abort_if_unique_id_mismatch(reason="wrong_account")
+                return self.async_update_reload_and_abort(
+                    entry, data_updates={CONF_EMAIL: email, CONF_PASSWORD: password}
+                )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=self.add_suggested_values_to_schema(
+                _credentials_schema(), {CONF_EMAIL: email}
+            ),
+            errors=errors,
+            description_placeholders={"disclaimer": PASSWORD_DISCLAIMER},
         )
 
     async def _async_load_patients(
@@ -317,6 +346,16 @@ async def _async_patient_options(
         label = name.strip() if isinstance(name, str) and name.strip() else account
         options.append(SelectOptionDict(value=account, label=label))
     return options
+
+
+def _credentials_schema() -> probatio.Schema:
+    """The email and password form of the user and reconfigure steps."""
+    return probatio.Schema(
+        {
+            probatio.Required(CONF_EMAIL): _EMAIL_SELECTOR,
+            probatio.Required(CONF_PASSWORD): _PASSWORD_SELECTOR,
+        }
+    )
 
 
 def _patients_selector(options: list[SelectOptionDict]) -> SelectSelector:

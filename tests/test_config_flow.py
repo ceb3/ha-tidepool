@@ -13,6 +13,8 @@ from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType, InvalidData
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.selector import NumberSelector, SelectSelector
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.test_util.aiohttp import (
@@ -26,6 +28,8 @@ from custom_components.tidepool.const import (
     DOMAIN,
     PASSWORD_DISCLAIMER,
 )
+
+from .entries import mock_latest, mock_profile, mock_slow
 
 EMAIL = "fake.person@example.invalid"
 PASSWORD = "fake-password-hunter2"
@@ -127,11 +131,13 @@ async def _submit_user(hass: HomeAssistant, flow_id: str) -> dict[str, Any]:
 
 
 def _entry(hass: HomeAssistant, **options: Any) -> MockConfigEntry:
+    """An entry as an earlier version saved it: with the old ``auth_method``."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         unique_id=USER_ID,
         title="Fake Owner",
         data={
+            "auth_method": "legacy",
             "email": EMAIL,
             "password": PASSWORD,
             CONF_PATIENTS: [USER_ID],
@@ -470,6 +476,7 @@ async def test_options_loaded_prefers_shared_client(
         unique_id=USER_ID,
         state=ConfigEntryState.LOADED,
         data={
+            "auth_method": "legacy",
             "email": EMAIL,
             "password": PASSWORD,
             CONF_PATIENTS: [USER_ID],
@@ -486,3 +493,127 @@ async def test_options_loaded_prefers_shared_client(
     ]
     assert stub.calls
     assert aioclient_mock.call_count == 0  # no second login
+
+
+# -- reconfigure -------------------------------------------------------------
+
+NEW_EMAIL = "fake.renamed@example.invalid"
+
+
+async def _loaded_entry(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> MockConfigEntry:
+    """An entry set up for real, so it has devices and entities to keep."""
+    entry = _entry(hass)
+    _mock_login(aioclient_mock)
+    mock_latest(aioclient_mock)
+    mock_profile(aioclient_mock)
+    mock_slow(aioclient_mock)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
+    return entry
+
+
+def _registered(hass: HomeAssistant, entry: MockConfigEntry) -> tuple[set, set]:
+    entities = {
+        (e.entity_id, e.unique_id, e.device_id)
+        for e in er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)
+    }
+    devices = {
+        (d.id, frozenset(d.identifiers))
+        for d in dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
+    }
+    return entities, devices
+
+
+async def test_reconfigure_updates_credentials_keeps_entities(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    entry = await _loaded_entry(hass, aioclient_mock)
+    entities, devices = _registered(hass, entry)
+    assert entities and devices
+
+    result = await entry.start_reconfigure_flow(hass)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reconfigure"
+    assert result["description_placeholders"]["disclaimer"] == EXPECTED_DISCLAIMER
+    # The email is offered again, the password never is.
+    assert _suggested(result, "email") == EMAIL
+    assert _suggested(result, "password") is None
+
+    aioclient_mock.clear_requests()
+    _mock_login(aioclient_mock)
+    mock_latest(aioclient_mock)
+    mock_profile(aioclient_mock)
+    mock_slow(aioclient_mock)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"email": NEW_EMAIL, "password": NEW_PASSWORD}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.unique_id == USER_ID
+    assert entry.data["email"] == NEW_EMAIL
+    assert entry.data["password"] == NEW_PASSWORD
+    assert entry.data[CONF_PATIENTS] == [USER_ID]
+    # Reloaded with the new credentials: the login and the refreshes ran again.
+    assert entry.state is ConfigEntryState.LOADED
+    assert any(method.lower() == "post" for method, *_ in aioclient_mock.mock_calls)
+    assert _registered(hass, entry) == (entities, devices)
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
+
+
+async def test_reconfigure_wrong_account_aborts(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    entry = _entry(hass)
+    result = await entry.start_reconfigure_flow(hass)
+    _mock_login(aioclient_mock, user_id=OTHER_USER_ID)
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"email": NEW_EMAIL, "password": NEW_PASSWORD}
+    )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "wrong_account"
+    assert entry.data["email"] == EMAIL
+    assert entry.data["password"] == PASSWORD
+    assert entry.unique_id == USER_ID
+
+
+@pytest.mark.parametrize(
+    ("status", "error"),
+    [(401, "invalid_auth"), (410, "login_withdrawn"), (503, "cannot_connect")],
+)
+async def test_reconfigure_failed_login_shows_error(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    status: int,
+    error: str,
+) -> None:
+    entry = _entry(hass)
+    result = await entry.start_reconfigure_flow(hass)
+    _mock_login(aioclient_mock, status=status)
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"email": NEW_EMAIL, "password": "fake-still-wrong"}
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reconfigure"
+    assert result["errors"] == {"base": error}
+    assert result["description_placeholders"]["disclaimer"] == EXPECTED_DISCLAIMER
+    # The typed email stays in the form; the password does not.
+    assert _suggested(result, "email") == NEW_EMAIL
+    assert _suggested(result, "password") is None
+    assert entry.data["email"] == EMAIL
+    assert entry.data["password"] == PASSWORD
+
+
+def _suggested(result: dict[str, Any], key: str) -> Any:
+    for marker in result["data_schema"].schema:
+        if marker == key:
+            return (marker.description or {}).get("suggested_value")
+    raise AssertionError(f"{key} not in schema")

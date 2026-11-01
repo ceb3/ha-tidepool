@@ -26,6 +26,18 @@
         "data": {
           "password": "Password"
         }
+      },
+      "reconfigure": {
+        "title": "Change the Tidepool sign-in",
+        "description": "Update the email and password of the Tidepool account this entry uses, for example after changing them on Tidepool. Sign in with the same account; to add a different one, add another entry.\n\n{disclaimer}",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        },
+        "data_description": {
+          "email": "The email address of your Tidepool account.",
+          "password": "The password of your Tidepool account."
+        }
       }
     },
     "error": {
@@ -39,7 +51,8 @@
       "already_configured": "This Tidepool account is already configured.",
       "already_in_progress": "A sign-in for this Tidepool account is already in progress.",
       "wrong_account": "You signed in with a different Tidepool account. Sign in with the account this entry was set up with.",
-      "reauth_successful": "Signed in again successfully."
+      "reauth_successful": "Signed in again successfully.",
+      "reconfigure_successful": "The Tidepool sign-in was updated successfully."
     }
   },
   "options": {
@@ -58,6 +71,12 @@
     },
     "error": {
       "no_patients": "Choose at least one account."
+    }
+  },
+  "issues": {
+    "login_withdrawn": {
+      "title": "Tidepool sign-in is no longer available",
+      "description": "Tidepool's email and password login did not answer as expected, so this Tidepool entry cannot sign in or refresh its data. Tidepool may have changed or restricted this login. Signing in again will not help: Home Assistant keeps trying, and this message goes away once the sign-in works again. See [Sign-in and limitations]({docs_url}) for what to do."
     }
   },
   "entity": {

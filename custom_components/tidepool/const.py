@@ -25,6 +25,11 @@ MAX_FAST_INTERVAL: Final = 30
 # Slow refresh interval (summaries, data sources and sets, profile).
 SLOW_INTERVAL: Final = timedelta(hours=1)
 
+# The repair issue raised while Tidepool's sign-in is withdrawn (one per
+# entry: the issue id is this key and the entry id), and the docs it links to.
+ISSUE_LOGIN_WITHDRAWN: Final = "login_withdrawn"
+SIGN_IN_DOCS_URL: Final = "https://github.com/ceb3/ha-tidepool#sign-in-and-limitations"
+
 # Services and their fields.
 SERVICE_REFRESH: Final = "refresh"
 SERVICE_IMPORT_HISTORY: Final = "import_history"
