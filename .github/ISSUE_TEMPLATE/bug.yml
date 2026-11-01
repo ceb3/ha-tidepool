@@ -13,7 +13,7 @@ body:
         - Tidepool ids, names, email addresses, device ids or serial numbers
         - passwords, tokens or anything else that signs in
 
-        Describe the problem in words, and use the counts-only diagnostics download below. Before you attach logs or diagnostics, read them and remove anything private.
+        Describe the problem in words, and use the counts-only diagnostics download below. Before you attach logs or diagnostics, read them and remove anything private. Home Assistant's own log lines can include the entry title, which is the patient's full name: remove names too.
 
         Not sure whether it is a bug? See [Sign-in and limitations](https://github.com/ceb3/ha-tidepool#sign-in-and-limitations) and [Troubleshooting and FAQ](https://github.com/ceb3/ha-tidepool#troubleshooting-and-faq) first.
   - type: input

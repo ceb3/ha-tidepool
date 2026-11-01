@@ -20,6 +20,10 @@ First release.
   water intake as optional entities that are off by default.
 - Event entities for alarms, meals and boluses.
 - Devices for the pump, the CGM and the data sources behind the records.
+- Once the pump and CGM are identified, their entities appear under those
+  child devices, so friendly names look like "<model> Glucose" while entity
+  ids stay based on the patient's name (for example
+  `sensor.<patient>_glucose`).
 - Services `tidepool.refresh` and `tidepool.import_history` (hourly glucose
   statistics of the past 1 to 90 days).
 - Options for the refresh interval (2 to 30 minutes) and the accounts.

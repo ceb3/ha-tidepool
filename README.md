@@ -79,7 +79,7 @@ What this means in practice:
 
 Entities are grouped by the device they appear on. The patient device is named after the profile name of the Tidepool account (or "Tidepool patient" if it has none). Below it, one device is registered for each device that produced the account's latest records, named after the model in its data sets, or "Insulin pump", "CGM" or "Data source" when the model is unknown. A device that produced pump records is the pump, even if it also reads glucose. Pump entities and CGM entities sit on that pump or CGM device once one is known, and on the patient device until then.
 
-Entity ids start with the patient's device name. In the tables, **Key** is the entity's translation key (its unique id ends with it) and **Default** says whether the entity is enabled when it is first created. Enable the ones that are off in **Settings > Devices & services > Entities** (switch on "Show disabled entities"), or from the entity's settings.
+Entity ids start with the patient's device name. In the tables, **Key** is the entity's translation key and **Default** says whether the entity is enabled when it is first created. Enable the ones that are off in **Settings > Devices & services > Entities** (switch on "Show disabled entities"), or from the entity's settings. Unique ids are stable and never contain the patient's name.
 
 Glucose values use mg/dL if Home Assistant's unit system is US customary, and mmol/L otherwise (Tidepool stores mmol/L). Change the unit system under **Settings > System > General**. Where a table says "glucose unit", it means this.
 
@@ -186,7 +186,8 @@ Other optional records, not tied to a pump or CGM:
 Notes on the pump entities:
 
 - The basal rate, basal mode and the two delivery sensors are unknown once the newest basal segment ended more than two hours ago, instead of showing an old state as current. The attributes still say when the segment ran.
-- The "now" settings pick the entry of the pump's schedule that is in force at the pump's local time, and are refreshed every minute. Settings carry a note that they are shown as last uploaded, not advice. Nothing is calculated from them.
+- The "now" settings pick the entry of the pump's schedule that is in force at the pump's local time, and are refreshed every minute. The pump's local time comes from the time zone in its settings record. If the record only has a fixed UTC offset, Home Assistant's time zone is used when it had that same offset at the time of the record (so daylight saving time is followed); otherwise the offset is kept as it is. The `zone_basis` attribute of these sensors says which applies: `named_zone`, `home_zone` or `fixed_offset`.
+- The carb ratio, insulin sensitivity, target low and target high sensors carry the attributes `as_of` (when the settings were uploaded) and `note` ("Pump setting as last uploaded; not advice."). Nothing is calculated from any setting.
 - Insulin on board and carbs on board come from the newest dosing decision or bolus calculator record that has them. The attributes say when ("as of") and from which record. They are never extrapolated to the present.
 - The 24 hour totals are unknown until the pump has uploaded basal or bolus records in the last 24 hours.
 
@@ -240,6 +241,7 @@ How they fire:
 - Each record fires **once**, when it first shows up in the 24 hour window. A record uploaded late still fires, once, with its own time as an attribute.
 - Nothing is replayed. The records already there when the entity is first created are only marked as seen, and after a restart or reload only records that arrived since then fire.
 - At most **5** events fire per refresh, the newest ones; the others are marked as seen without firing, so a long gap in uploads does not flood your automations.
+- If the 24 hour window could not be read at the very first refresh after the entity was created, up to 5 records that are already old may fire once when it is read.
 
 ## Repairs and diagnostics
 
@@ -263,13 +265,15 @@ What is sent, and to whom:
 
 - Requests go to `https://api.tidepool.org` and nowhere else. They carry your email and password to sign in, then a session token, and the ids of the accounts whose data is read.
 - Nothing is sent to the author of this integration or to any third party. There is no telemetry, analytics or crash reporting.
-- The integration's log messages are written to avoid identifiers, tokens, emails and passwords. Even so, look through logs before sharing them.
+- The integration's log messages are written to avoid identifiers, tokens, emails and passwords. Home Assistant's own log messages about the entry (for example when its setup is retried) may include the entry title, which is the patient's full name. Look through logs and remove names before sharing them.
 
 ## Troubleshooting and FAQ
 
 **An entity is unknown.** Tidepool has no matching data for it, or the record lacks the field. Check the matching "Last ... data" sensor (turn it on if needed) to see whether Tidepool has such records at all. Pump entities stay unknown for an account that has no pump data. The basal and delivery entities are also unknown when the newest basal segment ended more than two hours ago.
 
 **The values are old or stale.** First look at Tidepool itself: the integration can only show what Tidepool has, and Tidepool data can lag the device by several minutes or more, depending on the app or uploader. **Glucose age** shows how old the newest reading is. Summaries refresh hourly. Run `tidepool.refresh` to fetch now. If the entities are unavailable, look at the repair issue and at the log.
+
+**Why are entities unavailable instead of showing the last value?** When a refresh fails (Tidepool cannot be reached, the sign-in fails, requests are limited), the entities of that refresh become unavailable until a refresh works again: the last value is not shown as if it were current. While data is flowing, **Glucose age** shows how old the newest reading is. If only one of the hourly extra requests fails (data sources, data sets, profile, a device event or the fingerstick summary), the value from the previous hour is kept instead.
 
 **It says my sign-in does not work / I use two-factor authentication.** Accounts with two-factor authentication cannot sign in this way; see [Sign-in and limitations](#sign-in-and-limitations). A wrong email or password shows "The email or password is not correct". If Tidepool's login does not answer as expected, the form says so and no entry is created.
 

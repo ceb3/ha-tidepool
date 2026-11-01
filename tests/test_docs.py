@@ -163,6 +163,8 @@ def test_issue_templates() -> None:
     warning = bug["body"][0]["attributes"]["value"].lower()
     for word in ("health data", "glucose", "ids", "passwords", "tokens"):
         assert word in warning
+    # Home Assistant's own log lines may carry the entry title (a full name).
+    assert "entry title" in warning
 
 
 def test_release_workflow_and_hacs_metadata() -> None:
