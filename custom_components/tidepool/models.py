@@ -5,8 +5,9 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta, timezone, tzinfo
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .const import GLUCOSE_FACTOR
 
@@ -457,3 +458,163 @@ def newest_device_events(records: Iterable[Any]) -> dict[str, dict]:
         if key is not None and (key not in newest or time > newest[key][0]):
             newest[key] = (time, record)
     return {key: record for key, (_, record) in newest.items()}
+
+
+# Settings: the pump's and CGM's configuration as last uploaded. Nothing here
+# computes with a setting; a schedule entry is selected and a glucose value is
+# converted to another unit, no more.
+
+MMOL = "mmol/L"
+MGDL = "mg/dL"
+# Records spell the units both ways (``mg/dL`` and ``mg/dl``).
+_GLUCOSE_UNITS = {MMOL.casefold(): MMOL, MGDL.casefold(): MGDL}
+
+
+def dig(value: Any, *keys: str) -> Any:
+    """Follow nested dict keys; None if any step is missing or not a dict."""
+    for key in keys:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(key)
+    return value
+
+
+def glucose_unit(record: dict) -> str | None:
+    """The glucose unit a settings or wizard record is written in, or None.
+
+    A pump's settings keep it in ``units.bg``; CGM settings and the bolus
+    calculator in ``units``. A unit the spec does not list is None: a number
+    in an unknown unit is not shown.
+    """
+    if record.get("type") == "pumpSettings":
+        raw = dig(record, "units", "bg")
+    else:
+        raw = record.get("units")
+    return _GLUCOSE_UNITS.get(raw.casefold()) if isinstance(raw, str) else None
+
+
+def convert_glucose(value: float, source: str, target: str) -> float:
+    """Convert a glucose value between mg/dL and mmol/L with the shared factor.
+
+    Equal units pass through untouched; mg/dL is rounded to one decimal and
+    mmol/L to two, as a pump shows them.
+    """
+    if source == target:
+        return value
+    if target == MGDL:
+        return mmol_to_mgdl(value)
+    return round(value / GLUCOSE_FACTOR, 2)
+
+
+def pump_timezone(settings: dict, default: tzinfo) -> tzinfo:
+    """The time zone a pump's schedules are read in.
+
+    From the settings record: its ``timezone`` name if it holds a known one
+    (this follows daylight saving time), else ``scheduleTimeZoneOffset`` (the
+    offset the schedules were made in; real records carry it though the spec
+    does not list it for settings), else the record's ``timezoneOffset``, both
+    in minutes from UTC, else ``default``. An offset is a fixed one: it is the
+    offset when the pump uploaded.
+    """
+    name = settings.get("timezone")
+    if isinstance(name, str):
+        try:
+            return ZoneInfo(name)
+        except ZoneInfoNotFoundError, ValueError, OSError:
+            pass
+    for key in ("scheduleTimeZoneOffset", "timezoneOffset"):
+        offset = settings.get(key)
+        if is_number(offset) and abs(offset) < DAY / timedelta(minutes=1):
+            return timezone(timedelta(minutes=offset))
+    return default
+
+
+def pump_local_time(settings: dict, now: datetime, default: tzinfo) -> datetime:
+    """``now`` on the pump's clock (see ``pump_timezone``)."""
+    return now.astimezone(pump_timezone(settings, default))
+
+
+def _time_of_day(local_time: time | timedelta | datetime) -> timedelta:
+    """The offset from midnight of a time, a datetime's time or an offset."""
+    if isinstance(local_time, datetime):
+        local_time = local_time.time()
+    if isinstance(local_time, time):
+        local_time = timedelta(
+            hours=local_time.hour,
+            minutes=local_time.minute,
+            seconds=local_time.second,
+            microseconds=local_time.microsecond,
+        )
+    return local_time % DAY
+
+
+def value_at(schedule: Any, local_time: time | timedelta | datetime) -> dict | None:
+    """The entry of a pump schedule in force at a time of day.
+
+    A schedule is a list of entries whose ``start`` is milliseconds since
+    midnight on the pump's clock; an entry holds until the next one starts. The
+    entry with the greatest ``start`` that is at or before the time applies
+    (at exactly an entry's start, that entry). Schedules wrap: before the first
+    entry, which then starts after midnight, the previous day's last entry
+    still applies. Entries are taken in any order; one without a numeric
+    ``start`` is skipped. Only an empty or unusable schedule gives None.
+    """
+    entries = sorted(
+        (
+            entry
+            for entry in (schedule if isinstance(schedule, list) else [])
+            if isinstance(entry, dict) and is_number(entry.get("start"))
+        ),
+        key=lambda entry: entry["start"],
+    )
+    if not entries:
+        return None
+    now = _time_of_day(local_time) / timedelta(milliseconds=1)
+    return ([e for e in entries if e["start"] <= now] or entries)[-1]
+
+
+def active_entry(
+    settings: dict, key: str, local_time: time | timedelta | datetime, *, sole: bool
+) -> dict | None:
+    """The entry now in force of a set of named schedules of a settings record.
+
+    ``key`` names the set (``basalSchedules``, ``carbRatios``...) and the
+    schedule used is the one named by ``activeSchedule``. With ``sole`` a set
+    with a single schedule of another name is used too: carb ratios, targets
+    and sensitivities are often not named like the basal schedule. Otherwise
+    (or with several schedules, none active) there is no answer.
+    """
+    schedules = settings.get(key)
+    if not isinstance(schedules, dict):
+        return None
+    name = settings.get("activeSchedule")
+    schedule = schedules.get(name) if isinstance(name, str) else None
+    if schedule is None and sole and len(schedules) == 1:
+        (schedule,) = schedules.values()
+    return value_at(schedule, local_time)
+
+
+# The states a reported-state record may hold, as the Tidepool data spec lists
+# them; ``other`` stands in for any it does not list. Its free text is not read.
+REPORTED_STATES = (
+    "alcohol",
+    "cycle",
+    "hyperglycemiaSymptoms",
+    "hypoglycemiaSymptoms",
+    "illness",
+    "other",
+    "stress",
+)
+
+
+def reported_states(record: dict) -> list[str]:
+    """The state names of a reported-state record, once each in record order."""
+    states = record.get("states")
+    names = [
+        state["state"]
+        for state in (states if isinstance(states, list) else [])
+        if isinstance(state, dict) and isinstance(state.get("state"), str)
+    ]
+    return list(
+        dict.fromkeys(name if name in REPORTED_STATES else "other" for name in names)
+    )

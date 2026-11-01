@@ -260,6 +260,48 @@
       },
       "last_status_change": {
         "name": "Last delivery status change"
+      },
+      "active_schedule": {
+        "name": "Active basal schedule"
+      },
+      "scheduled_basal_now": {
+        "name": "Scheduled basal rate now"
+      },
+      "carb_ratio_now": {
+        "name": "Carb ratio setting now"
+      },
+      "sensitivity_now": {
+        "name": "Insulin sensitivity setting now"
+      },
+      "target_low_now": {
+        "name": "Target range low now"
+      },
+      "target_high_now": {
+        "name": "Target range high now"
+      },
+      "max_basal": {
+        "name": "Maximum basal rate setting"
+      },
+      "max_bolus": {
+        "name": "Maximum bolus setting"
+      },
+      "insulin_model": {
+        "name": "Insulin model"
+      },
+      "alert_high": {
+        "name": "High glucose alert level"
+      },
+      "alert_low": {
+        "name": "Low glucose alert level"
+      },
+      "last_wizard_entry": {
+        "name": "Last bolus calculator entry"
+      },
+      "reported_state": {
+        "name": "Last reported state"
+      },
+      "water_intake": {
+        "name": "Last water intake"
       }
     }
   }
