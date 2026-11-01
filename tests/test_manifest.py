@@ -21,4 +21,4 @@ def test_manifest_fields() -> None:
     assert re.fullmatch(r"\d+\.\d+\.\d+", manifest["version"])
 
     hacs = json.loads((ROOT / "hacs.json").read_text())
-    assert hacs["homeassistant"] == "2025.10.0"
+    assert hacs["homeassistant"] == "2026.10.0"

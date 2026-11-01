@@ -16,16 +16,19 @@ from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.util import slugify
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.test_util.aiohttp import (
     AiohttpClientMocker,
 )
 
+from custom_components.tidepool import async_remove_config_entry_device
 from custom_components.tidepool.const import DOMAIN
-from custom_components.tidepool.devices import DeviceRole, child_devices
+from custom_components.tidepool.devices import ChildDevice, DeviceRole, child_devices
 from custom_components.tidepool.models import parse_latest
 
 from .entries import (
+    PATIENT_ID,
     USER_ID,
     mock_latest,
     mock_login,
@@ -43,6 +46,7 @@ SERIAL = "FAKESERIAL9999"
 SOURCE_ON = "fakesource00000000000000000000001"
 SOURCE_ERROR = "fakesource00000000000000000000002"
 SOURCE_OFF = "fakesource00000000000000000000003"
+SOURCE_ODD = "fakesource00000000000000000000004"
 
 # Every entity of these keys belongs to the pump device once there is one.
 PUMP_KEYS = (
@@ -177,13 +181,34 @@ async def _setup(
     freezer.move_to(NOW)
     entry = password_entry(hass)
     mock_login(aioclient_mock)
-    mock_latest(aioclient_mock, payload=latest or [])
-    mock_profile(aioclient_mock)
+    _mock_patient(aioclient_mock, USER_ID, "Fake Owner", latest, data_sets)
     mock_slow(aioclient_mock, data_sets=data_sets, data_sources=data_sources)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.LOADED
     return entry
+
+
+def _mock_patient(
+    aioclient_mock: AiohttpClientMocker,
+    user_id: str,
+    name: str,
+    latest: list[dict] | None,
+    data_sets: list[dict] | None,
+) -> None:
+    """Mock a patient's latest records and profile; slow data is mocked apart."""
+    mock_latest(aioclient_mock, user_id, payload=latest or [])
+    mock_profile(aioclient_mock, user_id, full_name=name)
+
+
+def _entity_ids(hass: HomeAssistant, entry: MockConfigEntry) -> dict[str, str]:
+    """Entity id per unique id of every entity of the entry."""
+    return {
+        registered.unique_id: registered.entity_id
+        for registered in er.async_entries_for_config_entry(
+            er.async_get(hass), entry.entry_id
+        )
+    }
 
 
 def _entity(hass: HomeAssistant, platform: str, key: str) -> er.RegistryEntry:
@@ -236,6 +261,9 @@ def test_device_roles_from_record_types() -> None:
     assert devices[PUMP_ID].name == "FakeCorp Pump X1"
     # The model already names the manufacturer.
     assert devices[CGM_ID].name == "FakeSense G1"
+    assert ChildDevice(DeviceRole.CGM, "fakesense", "FakeSense G1").name == (
+        "FakeSense G1"
+    )
     assert devices[PHONE_ID].name == "Data source"
 
 
@@ -462,10 +490,17 @@ async def test_data_source_connectivity_state(
         _source(SOURCE_ON, "fakeprovider", "connected"),
         _source(SOURCE_ERROR, "otherprovider", "error"),
         _source(SOURCE_OFF, "thirdprovider", "disconnected"),
+        _source(SOURCE_ODD, "fourthprovider", "pending"),
     ]
     await _setup(hass, aioclient_mock, freezer, data_sources=sources)
 
-    expected = {SOURCE_ON: STATE_ON, SOURCE_ERROR: STATE_OFF, SOURCE_OFF: STATE_UNKNOWN}
+    expected = {
+        SOURCE_ON: STATE_ON,
+        SOURCE_ERROR: STATE_OFF,
+        SOURCE_OFF: STATE_OFF,
+        # Not a state the API documents.
+        SOURCE_ODD: STATE_UNKNOWN,
+    }
     for source_id, value in expected.items():
         registered = _entity(hass, "binary_sensor", f"source_{source_id}")
         assert registered.entity_category == "diagnostic"
@@ -539,3 +574,134 @@ async def test_sparse_account_has_no_child_devices_or_sources(
         for r in caplog.records
         if r.levelno >= logging.WARNING and r.name.startswith("custom_components")
     ]
+
+
+def test_upload_falls_back_to_data_set_id() -> None:
+    data_set = _data_set(
+        "up-pump", PUMP_ID, 20, manufacturers=["FakeCorp"], model="X", tags=[]
+    )
+    del data_set["uploadId"]
+    latest = parse_latest([_record("smbg", 5, uploadId="up-pump", value=6.0)])
+    assert list(child_devices(latest, [data_set])) == [PUMP_ID]
+
+
+# --- entity ids -----------------------------------------------------------
+
+
+@pytest.mark.parametrize("devices_known", [True, False])
+async def test_entity_ids_are_patient_based(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+    devices_known: bool,
+) -> None:
+    # Whether or not the pump and CGM are known when entities are first added,
+    # the entity ids are the same.
+    if devices_known:
+        entry = await _setup(
+            hass, aioclient_mock, freezer, latest=LATEST, data_sets=DATA_SETS
+        )
+    else:
+        entry = await _setup(hass, aioclient_mock, freezer)
+    assert bool(_child_devices(hass, entry)) is devices_known
+
+    for platform, key in PUMP_KEYS + CGM_KEYS + PATIENT_KEYS:
+        registered = _entity(hass, platform, key)
+        name = slugify(f"Fake Owner {registered.original_name}")
+        assert registered.entity_id == f"{platform}.{name}"
+    assert (
+        _entity(hass, "sensor", "basal_rate").entity_id
+        == "sensor.fake_owner_basal_rate"
+    )
+    assert all(".fake_owner_" in i for i in _entity_ids(hass, entry).values())
+    glucose = hass.states.get("sensor.fake_owner_glucose")
+    assert glucose is not None
+    # The friendly name starts with the device the entity is on.
+    expected = "FakeSense G1 Glucose" if devices_known else "Fake Owner Glucose"
+    assert glucose.attributes["friendly_name"] == expected
+
+
+async def test_same_model_pumps_of_two_patients(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    freezer.move_to(NOW)
+    entry = password_entry(hass, patients=[USER_ID, PATIENT_ID])
+    mock_login(aioclient_mock)
+    for user_id, name, device_id in (
+        (USER_ID, "Fake Owner", PUMP_ID),
+        (PATIENT_ID, "Fake Child", "fake-pump-device-0002"),
+    ):
+        latest = [{**r, "deviceId": device_id} for r in PUMP_RECORDS]
+        data_set = {**DATA_SETS[0], "deviceId": device_id}
+        _mock_patient(aioclient_mock, user_id, name, latest, [data_set])
+        mock_slow(aioclient_mock, user_id, data_sets=[data_set])
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    ids = _entity_ids(hass, entry)
+    for user_id, slug in ((USER_ID, "fake_owner"), (PATIENT_ID, "fake_child")):
+        assert ids[f"{user_id}_basal_rate"] == f"sensor.{slug}_basal_rate"
+    assert not [i for i in ids.values() if i.endswith(("_2", "_3"))]
+
+
+async def test_registered_entity_ids_are_kept(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    # An install from before child devices, or one the user renamed.
+    registry = er.async_get(hass)
+    for platform, key in (("sensor", "basal_rate"), ("sensor", "glucose")):
+        registry.async_get_or_create(
+            platform, DOMAIN, f"{USER_ID}_{key}", suggested_object_id=f"my_{key}"
+        )
+
+    await _setup(hass, aioclient_mock, freezer, latest=LATEST, data_sets=DATA_SETS)
+
+    assert _entity(hass, "sensor", "basal_rate").entity_id == "sensor.my_basal_rate"
+    assert _entity(hass, "sensor", "glucose").entity_id == "sensor.my_glucose"
+    assert _entity(hass, "sensor", "last_bolus").entity_id == (
+        "sensor.fake_owner_last_bolus"
+    )
+
+
+# --- removing devices -----------------------------------------------------
+
+
+async def test_only_unused_child_devices_can_be_removed(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    entry = await _setup(
+        hass, aioclient_mock, freezer, latest=LATEST, data_sets=DATA_SETS
+    )
+    # The pump is replaced: the next records come from another one.
+    new_pump = "fake-pump-device-0002"
+    aioclient_mock.clear_requests()
+    mock_latest(
+        aioclient_mock,
+        payload=[*[{**r, "deviceId": new_pump} for r in PUMP_RECORDS], *CGM_RECORDS],
+    )
+    await entry.runtime_data.fast[USER_ID].async_refresh()
+    await hass.async_block_till_done()
+
+    removable = {
+        key: await async_remove_config_entry_device(
+            hass, entry, _device(hass, entry, key)
+        )
+        for key in (
+            USER_ID,
+            f"{USER_ID}_{PUMP_ID}",
+            f"{USER_ID}_{new_pump}",
+            f"{USER_ID}_{CGM_ID}",
+        )
+    }
+    assert removable == {
+        USER_ID: False,
+        f"{USER_ID}_{PUMP_ID}": True,
+        f"{USER_ID}_{new_pump}": False,
+        f"{USER_ID}_{CGM_ID}": False,
+    }

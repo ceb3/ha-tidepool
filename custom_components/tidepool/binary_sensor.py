@@ -65,8 +65,9 @@ async def async_setup_entry(
         _track_sources(entry, runtime.slow[user_id], name, async_add_entities)
 
 
-# Connection state of each data source state; any other state is unknown.
-SOURCE_CONNECTED = {"connected": True, "error": False}
+# Whether a data source in each documented state is connected; any other
+# state is unknown.
+SOURCE_CONNECTED = {"connected": True, "disconnected": False, "error": False}
 
 
 def _sources(data: SlowData) -> dict[str, dict]:

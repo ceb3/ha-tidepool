@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import override
 
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityDescription
+from homeassistant.helpers.entity_platform import EntityPlatform
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import slugify
 
 from .coordinator import TidepoolCoordinator
 from .devices import DeviceRole, child_identifier, patient_device_info, role_device
@@ -23,6 +26,11 @@ class TidepoolEntity[C: TidepoolCoordinator](CoordinatorEntity[C]):
     shows a different device the registry entry moves to it in place, keeping
     its unique id and entity id; the devices themselves are registered by
     ``devices.async_setup_devices`` before entities are added.
+
+    A new entity's id is always the patient's name and the entity's name, so
+    it neither depends on whether a child device was known when the entity
+    was first added nor collides between patients with the same pump model.
+    An entity id already in the registry is kept.
     """
 
     _attr_has_entity_name = True
@@ -39,6 +47,21 @@ class TidepoolEntity[C: TidepoolCoordinator](CoordinatorEntity[C]):
         self._attr_unique_id = f"{coordinator.user_id}_{description.key}"
         self._device_name = device_name
         self._attr_device_info = self._resolve_device_info()
+
+    @override
+    def add_to_platform_start(
+        self,
+        hass: HomeAssistant,
+        platform: EntityPlatform,
+        parallel_updates: asyncio.Semaphore | None,
+    ) -> None:
+        super().add_to_platform_start(hass, platform, parallel_updates)
+        # Read now: the entity's own (English) name needs the platform's
+        # translations. Home Assistant uses a preset id only for a new entry.
+        name = self.suggested_object_id
+        if self.entity_id is None and name:
+            object_id = slugify(f"{self._device_name} {name}")
+            self.entity_id = f"{platform.domain}.{object_id}"
 
     def _resolve_device_info(self) -> DeviceInfo:
         user_id = self.coordinator.user_id

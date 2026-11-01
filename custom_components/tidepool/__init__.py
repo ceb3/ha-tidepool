@@ -7,6 +7,7 @@ import logging
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import (
@@ -24,7 +25,7 @@ from .coordinator import (
     TidepoolRuntime,
     TidepoolSlowCoordinator,
 )
-from .devices import async_setup_devices
+from .devices import async_setup_devices, identifiers_in_use
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,6 +61,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: TidepoolConfigEntry) -> 
 async def async_unload_entry(hass: HomeAssistant, entry: TidepoolConfigEntry) -> bool:
     """Unload a config entry; its coordinators shut down with it."""
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: TidepoolConfigEntry, device: dr.DeviceEntry
+) -> bool:
+    """Allow removing a child device that the current data no longer shows.
+
+    Patient devices and the devices behind the latest records stay; a removed
+    device in use would only be registered again on the next refresh.
+    """
+    return not device.identifiers & identifiers_in_use(entry)
 
 
 async def _async_name_patient(runtime: TidepoolRuntime, user_id: str) -> None:

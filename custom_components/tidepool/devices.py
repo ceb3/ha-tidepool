@@ -60,7 +60,9 @@ class ChildDevice:
     def name(self) -> str:
         if self.model is None:
             return ROLE_NAMES[self.role]
-        if self.manufacturer is None or self.model.startswith(self.manufacturer):
+        if self.manufacturer is None or self.model.casefold().startswith(
+            self.manufacturer.casefold()
+        ):
             return self.model
         return f"{self.manufacturer} {self.model}"
 
@@ -90,10 +92,12 @@ def _record_device(record: dict, uploads: dict[str, dict]) -> str | None:
 
 
 def _uploads(data_sets: list[dict]) -> dict[str, dict]:
+    """Data sets by upload id; a data set's own id is its upload id."""
     return {
         upload_id: data_set
         for data_set in data_sets
-        if isinstance(data_set, dict) and (upload_id := _text(data_set.get("uploadId")))
+        if isinstance(data_set, dict)
+        and (upload_id := _text(data_set.get("uploadId") or data_set.get("id")))
     }
 
 
@@ -155,6 +159,20 @@ def role_device(latest: Latest, data_sets: list[dict], role: DeviceRole) -> str 
         if (device_id := _record_device(record, uploads)) is not None:
             return device_id
     return None
+
+
+def identifiers_in_use(entry: TidepoolConfigEntry) -> set[tuple[str, str]]:
+    """The identifiers of every patient device and of the child devices in the data."""
+    runtime = entry.runtime_data
+    in_use = {(DOMAIN, user_id) for user_id in runtime.fast}
+    for user_id in runtime.names:
+        latest = runtime.fast[user_id].data.latest
+        data_sets = runtime.slow[user_id].data.data_sets
+        in_use.update(
+            child_identifier(user_id, device_id)
+            for device_id in child_devices(latest, data_sets)
+        )
+    return in_use
 
 
 @callback
