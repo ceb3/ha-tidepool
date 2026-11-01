@@ -17,13 +17,16 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import slugify
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_capture_events,
+)
 from pytest_homeassistant_custom_component.test_util.aiohttp import (
     AiohttpClientMocker,
 )
 
 from custom_components.tidepool import async_remove_config_entry_device
-from custom_components.tidepool.const import DOMAIN
+from custom_components.tidepool.const import API_URL, DOMAIN
 from custom_components.tidepool.devices import ChildDevice, DeviceRole, child_devices
 from custom_components.tidepool.models import parse_latest
 
@@ -665,6 +668,134 @@ async def test_registered_entity_ids_are_kept(
     assert _entity(hass, "sensor", "last_bolus").entity_id == (
         "sensor.fake_owner_last_bolus"
     )
+
+
+# --- failed slow requests keep the previous data (R20) --------------------
+
+
+def _slow_url(name: str) -> str:
+    if name == "profile":
+        return f"{API_URL}/metadata/{USER_ID}/profile"
+    return f"{API_URL}/v1/users/{USER_ID}/{name}"
+
+
+async def _setup_named(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+) -> MockConfigEntry:
+    """Set up with a named pump and CGM and a connected data source."""
+    sources = [_source(SOURCE_ON, "fakeprovider", "connected")]
+    return await _setup(
+        hass,
+        aioclient_mock,
+        freezer,
+        latest=LATEST,
+        data_sets=DATA_SETS,
+        data_sources=sources,
+    )
+
+
+def _snapshot(hass: HomeAssistant, entry: MockConfigEntry) -> dict[str, Any]:
+    pump = _device(hass, entry, f"{USER_ID}_{PUMP_ID}")
+    cgm = _device(hass, entry, f"{USER_ID}_{CGM_ID}")
+    upload = hass.states.get(_entity(hass, "sensor", "last_upload").entity_id)
+    source = hass.states.get(
+        _entity(hass, "binary_sensor", f"source_{SOURCE_ON}").entity_id
+    )
+    assert upload is not None
+    assert source is not None
+    return {
+        "pump": (pump.name, pump.model),
+        "cgm": (cgm.name, cgm.model),
+        "last_upload": upload.state,
+        "source": source.state,
+    }
+
+
+@pytest.mark.parametrize("failing", ["data_sets", "data_sources", "profile"])
+@pytest.mark.parametrize(
+    "failure", [{"status": 500}, {"exc": TimeoutError()}, {"text": "not json"}]
+)
+async def test_failed_optional_request_keeps_previous_value(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+    failing: str,
+    failure: dict[str, Any],
+) -> None:
+    """A blip of one slow request neither blanks entities nor renames devices."""
+    entry = await _setup_named(hass, aioclient_mock, freezer)
+    slow = entry.runtime_data.slow[USER_ID]
+    before = slow.data
+    snapshot = _snapshot(hass, entry)
+    assert snapshot["pump"] == ("FakeCorp Pump X1", "Pump X1")
+    assert snapshot["source"] == STATE_ON
+    renames = async_capture_events(hass, dr.EVENT_DEVICE_REGISTRY_UPDATED)
+
+    aioclient_mock.clear_requests()
+    # The mock registered first wins, so this one shadows ``mock_slow``'s.
+    aioclient_mock.get(_slow_url(failing), **failure)
+    mock_slow(
+        aioclient_mock,
+        data_sets=DATA_SETS,
+        data_sources=[_source(SOURCE_ON, "fakeprovider", "connected")],
+    )
+    mock_profile(aioclient_mock)
+    await slow.async_refresh()
+    await hass.async_block_till_done()
+
+    assert slow.last_update_success
+    assert slow.data is not before
+    assert getattr(slow.data, failing) == getattr(before, failing)
+    assert getattr(slow.data, failing)  # not the empty default
+    assert _snapshot(hass, entry) == snapshot
+    assert [e for e in renames if e.data["action"] == "update"] == []
+
+
+async def test_empty_successful_response_still_replaces(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    entry = await _setup_named(hass, aioclient_mock, freezer)
+    slow = entry.runtime_data.slow[USER_ID]
+
+    aioclient_mock.clear_requests()
+    mock_slow(aioclient_mock, data_sets=[], data_sources=[])
+    mock_profile(aioclient_mock)
+    await slow.async_refresh()
+    await hass.async_block_till_done()
+
+    assert slow.data.data_sets == []
+    assert slow.data.data_sources == []
+    pump = _device(hass, entry, f"{USER_ID}_{PUMP_ID}")
+    assert pump.name == "Insulin pump"
+
+
+@pytest.mark.parametrize("failure", [{"status": 500}, {"exc": TimeoutError()}])
+async def test_first_failed_optional_request_uses_the_default(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+    failure: dict[str, Any],
+) -> None:
+    freezer.move_to(NOW)
+    entry = password_entry(hass)
+    mock_login(aioclient_mock)
+    for name in ("data_sets", "data_sources"):
+        aioclient_mock.get(_slow_url(name), **failure)
+    _mock_patient(aioclient_mock, USER_ID, "Fake Owner", LATEST, None)
+    mock_slow(aioclient_mock)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.LOADED
+    slow = entry.runtime_data.slow[USER_ID]
+    assert slow.last_update_success
+    assert slow.data.data_sets == []
+    assert slow.data.data_sources == []
+    assert _device(hass, entry, f"{USER_ID}_{PUMP_ID}").name == "Insulin pump"
 
 
 # --- removing devices -----------------------------------------------------

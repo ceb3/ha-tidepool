@@ -701,3 +701,30 @@ async def test_bgm_403_on_shared_patient_fails_like_the_cgm_summary(
     assert not shared.last_update_success
     assert isinstance(shared.last_exception, UpdateFailed)
     assert entry.runtime_data.auth_failed is False
+
+
+async def test_bgm_server_error_keeps_the_previous_bgm_summary(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    bgm_url = f"{API_URL}/v1/summaries/bgm/{USER_ID}"
+    aioclient_mock.get(bgm_url, json=load_fixture("summary_cgm.json"))
+    entry = await _setup(hass, aioclient_mock)
+    slow = entry.runtime_data.slow[USER_ID]
+    previous = slow.data.summary("bgm", "14d")
+    assert previous is not None
+
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(bgm_url, status=500)
+    mock_slow_rest(aioclient_mock)
+    await slow.async_refresh()
+
+    assert slow.last_update_success
+    assert slow.data.summary("bgm", "14d") == previous
+
+    # A 404 is no bgm summary at all, not a failure.
+    aioclient_mock.clear_requests()
+    mock_slow_rest(aioclient_mock)
+    await slow.async_refresh()
+
+    assert slow.last_update_success
+    assert slow.data.summary("bgm", "14d") is None

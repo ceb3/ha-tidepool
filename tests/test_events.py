@@ -37,6 +37,7 @@ from .entries import (
     PATIENT_ID,
     USER_ID,
     device_event_gets,
+    latest_url,
     login_posts,
     mock_latest,
     mock_login,
@@ -544,3 +545,62 @@ async def test_shared_patient_withholding_device_events_degrades(
     assert len(device_event_gets(aioclient_mock, PATIENT_ID)) == 1
     assert login_posts(aioclient_mock) == 1
     assert entry.runtime_data.auth_failed is False
+
+
+# --- a failed device event request keeps its previous record (R20) --------
+
+
+def _fail_device_event_request(
+    aioclient_mock: AiohttpClientMocker, sub_type: str, failure: dict[str, Any]
+) -> None:
+    """Answer one subType's device event request with ``failure``.
+
+    Registered after ``mock_slow``, so it is moved in front of its mocks.
+    """
+    query: dict[str, str] = {"type": "deviceEvent", "subType": sub_type}
+    if sub_type != "prime":
+        query["latest"] = "true"
+    aioclient_mock.get(latest_url(USER_ID), params=query, **failure)
+    mocks = aioclient_mock._mocks
+    mocks.insert(0, mocks.pop())
+
+
+@pytest.mark.parametrize("failure", [{"status": 500}, {"exc": TimeoutError()}])
+@pytest.mark.parametrize(
+    ("failing", "kept"),
+    [("reservoirChange", "last_reservoir_change"), ("prime", "last_site_change")],
+)
+async def test_failed_device_event_request_keeps_its_timestamp(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+    failure: dict[str, Any],
+    failing: str,
+    kept: str,
+) -> None:
+    first = {
+        "reservoirChange": [_device_event("rc1", _ago(50), "reservoirChange")],
+        "alarm": [_alarm("al1", _ago(30))],
+        "prime": [_device_event("p1", _ago(49), "prime", primeTarget="cannula")],
+    }
+    entry = await _setup(hass, aioclient_mock, freezer, device_events=first)
+    slow = entry.runtime_data.slow[USER_ID]
+    before = _sensor(hass, kept).state
+    assert before != STATE_UNKNOWN
+
+    # The next hour: a newer alarm, while one request fails.
+    later = {
+        "reservoirChange": [_device_event("rc2", _ago(1), "reservoirChange")],
+        "alarm": [_alarm("al2", _ago(2))],
+        "prime": [_device_event("p2", _ago(1), "prime", primeTarget="cannula")],
+    }
+    aioclient_mock.clear_requests()
+    mock_slow(aioclient_mock, device_events=later)
+    mock_profile(aioclient_mock)
+    _fail_device_event_request(aioclient_mock, failing, failure)
+    await slow.async_refresh()
+    await hass.async_block_till_done()
+
+    assert slow.last_update_success
+    assert _sensor(hass, kept).state == before
+    assert _sensor(hass, "last_alarm").state == _ago(2).isoformat()

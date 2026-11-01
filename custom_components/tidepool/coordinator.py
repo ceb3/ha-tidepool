@@ -16,7 +16,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import override
+from typing import Any, override
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -49,6 +49,7 @@ from .models import (
     DAY,
     LATEST_DEVICE_EVENTS,
     PRIME_LOOKBACK,
+    PRIME_TARGETS,
     WINDOW_TYPES,
     Latest,
     Summary,
@@ -229,15 +230,19 @@ class TidepoolCoordinator[DataT](TimestampDataUpdateCoordinator[DataT]):
     async def _optional[T](
         self,
         request: Callable[[], Awaitable[T]],
-        default: T,
+        fallback: T,
         *,
         withhold: bool = False,
     ) -> T:
         """Make a request whose failure must not hide the rest of the refresh.
 
-        A missing resource or a failing server leaves the default. Refusals,
-        rate limits and a withdrawn sign-in still count: they say something
-        about the whole refresh.
+        A failing request (a server error, a timeout, a malformed body or a
+        missing resource) gives ``fallback``: callers pass the value of the
+        previous refresh, or the empty default before there is one, so a blip
+        neither blanks entities nor renames devices (R20). A successful empty
+        response still replaces the previous value. Refusals, rate limits and
+        a withdrawn sign-in still count: they say something about the whole
+        refresh.
         With ``withhold`` a 403 is not one of them (the patient's sharing just
         does not include this): it is not retried, so costs no extra login, and
         raises ``_Withheld``.
@@ -252,7 +257,7 @@ class TidepoolCoordinator[DataT](TimestampDataUpdateCoordinator[DataT]):
             raise
         except TidepoolError as err:
             _LOGGER.debug("An optional request failed: %s", err)
-            return default
+            return fallback
 
     def _retry_after_seconds(self, retry_after: float | None) -> float | None:
         """Delay the next refresh until ``Retry-After``, never below the interval.
@@ -315,54 +320,92 @@ class TidepoolSlowCoordinator(TidepoolCoordinator[SlowData]):
 
     @override
     async def _async_fetch(self) -> SlowData:
+        previous = self.data
         # An account without a kind of data has no summary of it (a 404).
         try:
             cgm = await self._call(lambda: self.client.summary(self.user_id, "cgm"))
         except NotFoundError:
             cgm = {}
-        bgm = await self._optional(lambda: self.client.summary(self.user_id, "bgm"), {})
-        data = SlowData(
-            summaries={"cgm": parse_summary(cgm), "bgm": parse_summary(bgm)}
+        bgm = await self._optional(
+            self._bgm_summary,
+            previous.summaries.get("bgm", {}) if previous is not None else {},
         )
+        data = SlowData(summaries={"cgm": parse_summary(cgm), "bgm": bgm})
+        # A request that fails or is skipped keeps the previous refresh's value.
+        if previous is not None:
+            data.data_sources = previous.data_sources
+            data.data_sets = previous.data_sets
+            data.profile = previous.profile
         # A shared patient may withhold these (403); the rest is then skipped.
         # A 403 also ends the session, so a later request would sign in again:
         # the device events (``/data``, which the fast coordinator already
         # reads) go first and the rest stays as it was.
         withhold = self.user_id != self.client.user_id
         events: list[dict] = []
+        optional: tuple[tuple[str, Callable[[], Awaitable[Any]], Any], ...] = (
+            ("data_sources", lambda: self.client.data_sources(self.user_id), []),
+            ("data_sets", lambda: self.client.data_sets(self.user_id), []),
+            ("profile", lambda: self.client.profile(self.user_id), {}),
+        )
         try:
-            await self._fetch_device_events(events, withhold)
-            data.data_sources = await self._optional(
-                lambda: self.client.data_sources(self.user_id), [], withhold=withhold
-            )
-            data.data_sets = await self._optional(
-                lambda: self.client.data_sets(self.user_id), [], withhold=withhold
-            )
-            data.profile = await self._optional(
-                lambda: self.client.profile(self.user_id), {}, withhold=withhold
-            )
+            await self._fetch_device_events(events, withhold, previous)
+            for name, request, empty in optional:
+                try:
+                    value = await self._optional(
+                        request, getattr(data, name), withhold=withhold
+                    )
+                except _Withheld:
+                    setattr(data, name, empty)
+                    raise
+                setattr(data, name, value)
         except _Withheld:
             _LOGGER.debug("A shared patient withholds some optional data")
         data.device_events = newest_device_events(events)
         return data
 
-    async def _fetch_device_events(self, records: list[dict], withhold: bool) -> None:
+    async def _bgm_summary(self) -> dict[str, Summary]:
+        """The parsed bgm summary; none (not a failure) for an account without."""
+        try:
+            return parse_summary(await self.client.summary(self.user_id, "bgm"))
+        except NotFoundError:
+            return {}
+
+    async def _fetch_device_events(
+        self, records: list[dict], withhold: bool, previous: SlowData | None
+    ) -> None:
         """Add the newest device events to ``records``: a request per subType.
 
         They are days apart (a reservoir or site change), so they come from
-        here rather than the 24 h window.
+        here rather than the 24 h window. A request that fails, or is skipped
+        after a withheld one, adds its previous newest records instead.
         """
         now = dt_util.utcnow()
+        requests: list[tuple[tuple[str, ...], Callable[[], Awaitable[list[dict]]]]]
         requests = [
-            lambda sub_type=sub_type: self.client.latest(
-                self.user_id, "deviceEvent", sub_type
+            (
+                (sub_type,),
+                lambda sub_type=sub_type: self.client.latest(
+                    self.user_id, "deviceEvent", sub_type
+                ),
             )
             for sub_type in LATEST_DEVICE_EVENTS
         ]
         requests.append(
-            lambda: self.client.data(
-                self.user_id, ["deviceEvent"], now - PRIME_LOOKBACK, now, "prime"
+            (
+                tuple(f"prime_{target}" for target in PRIME_TARGETS),
+                lambda: self.client.data(
+                    self.user_id, ["deviceEvent"], now - PRIME_LOOKBACK, now, "prime"
+                ),
             )
         )
-        for request in requests:
-            records.extend(await self._optional(request, [], withhold=withhold))
+        before = previous.device_events if previous is not None else {}
+        for index, (keys, request) in enumerate(requests):
+            fallback = [before[key] for key in keys if key in before]
+            try:
+                records.extend(
+                    await self._optional(request, fallback, withhold=withhold)
+                )
+            except _Withheld:
+                for skipped, _ in requests[index + 1 :]:
+                    records.extend(before[key] for key in skipped if key in before)
+                raise
