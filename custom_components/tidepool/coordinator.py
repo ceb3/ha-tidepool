@@ -134,17 +134,20 @@ class TidepoolCoordinator[DataT](DataUpdateCoordinator[DataT]):
         except TidepoolError as err:
             raise UpdateFailed(str(err)) from err
 
-    async def _call[T](self, request: Callable[[], Awaitable[T]]) -> T:
+    async def _call[T](
+        self, request: Callable[[], Awaitable[T]], *, retry_403: bool = True
+    ) -> T:
         """Make a request, retrying once after a refused request.
 
         A refused request has already invalidated the session, so the retry
         signs in again silently (an expired session token). A rejected login
-        is not retried: it would only repeat the wrong credentials.
+        is not retried: it would only repeat the wrong credentials. A 403 is
+        retried unless ``retry_403`` is False.
         """
         try:
             return await request()
         except AuthError as err:
-            if err.from_login:
+            if err.from_login or (err.status == 403 and not retry_403):
                 raise
         return await request()
 
@@ -180,6 +183,10 @@ class TidepoolFastCoordinator(TidepoolCoordinator[FastData]):
         return FastData(latest=parse_latest(payload))
 
 
+class _Withheld(Exception):
+    """A shared patient's sharing does not include an optional resource."""
+
+
 class TidepoolSlowCoordinator(TidepoolCoordinator[SlowData]):
     """Polls the summaries, data sources, data sets and profile of one patient."""
 
@@ -200,26 +207,47 @@ class TidepoolSlowCoordinator(TidepoolCoordinator[SlowData]):
         except NotFoundError:
             cgm = {}
         bgm = await self._optional(lambda: self.client.summary(self.user_id, "bgm"), {})
-        return SlowData(
-            summaries={"cgm": parse_summary(cgm), "bgm": parse_summary(bgm)},
-            data_sources=await self._optional(
-                lambda: self.client.data_sources(self.user_id), []
-            ),
-            data_sets=await self._optional(
-                lambda: self.client.data_sets(self.user_id), []
-            ),
-            profile=await self._optional(lambda: self.client.profile(self.user_id), {}),
+        data = SlowData(
+            summaries={"cgm": parse_summary(cgm), "bgm": parse_summary(bgm)}
         )
+        # A shared patient may withhold these (403); the rest is then skipped.
+        withhold = self.user_id != self.client.user_id
+        try:
+            data.data_sources = await self._optional(
+                lambda: self.client.data_sources(self.user_id), [], withhold=withhold
+            )
+            data.data_sets = await self._optional(
+                lambda: self.client.data_sets(self.user_id), [], withhold=withhold
+            )
+            data.profile = await self._optional(
+                lambda: self.client.profile(self.user_id), {}, withhold=withhold
+            )
+        except _Withheld:
+            _LOGGER.debug("A shared patient withholds some optional data")
+        return data
 
-    async def _optional[T](self, request: Callable[[], Awaitable[T]], default: T) -> T:
+    async def _optional[T](
+        self,
+        request: Callable[[], Awaitable[T]],
+        default: T,
+        *,
+        withhold: bool = False,
+    ) -> T:
         """Make a request whose failure must not hide the summaries.
 
         A missing resource or a failing server leaves the default. Refusals and
         rate limits still count: they say something about the whole refresh.
+        With ``withhold`` a 403 is not one of them (the patient's sharing just
+        does not include this): it is not retried, so costs no extra login, and
+        raises ``_Withheld``.
         """
         try:
-            return await self._call(request)
-        except AuthError, RateLimitedError:
+            return await self._call(request, retry_403=not withhold)
+        except AuthError as err:
+            if withhold and err.status == 403 and not err.from_login:
+                raise _Withheld from err
+            raise
+        except RateLimitedError:
             raise
         except TidepoolError:
             return default

@@ -86,6 +86,25 @@ async def _setup(
     return entry
 
 
+async def _setup_shared(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, **shared_slow: Any
+) -> MockConfigEntry:
+    """Set up the own account and one shared patient; only the latter's slow
+    endpoints get ``shared_slow``."""
+    hass.config.units = METRIC_SYSTEM
+    entry = legacy_entry(hass, patients=[USER_ID, PATIENT_ID])
+    mock_login(aioclient_mock)
+    for patient in (USER_ID, PATIENT_ID):
+        mock_latest(aioclient_mock, user_id=patient)
+        mock_profile(aioclient_mock, user_id=patient)
+    mock_slow(aioclient_mock, user_id=USER_ID)
+    mock_slow(aioclient_mock, user_id=PATIENT_ID, **shared_slow)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
+    return entry
+
+
 def _state(hass: HomeAssistant, key: str, user_id: str = USER_ID) -> State:
     entity_id = er.async_get(hass).async_get_entity_id(
         "sensor", DOMAIN, f"{user_id}_{key}"
@@ -121,9 +140,11 @@ def test_summary_parses_periods() -> None:
     assert isinstance(fortnight, Summary)
     # Fractions in the payload, percentages in the model.
     assert fortnight.time_in_range == 71.0
-    assert fortnight.low == 4.0
+    # low and high are all time out of range: they include the deeper bands
+    # (inLow 0.04 + inVeryLow 0.01; inHigh 0.2 + inVeryHigh 0.04).
+    assert fortnight.low == 5.0
     assert fortnight.very_low == 1.0
-    assert fortnight.high == 20.0
+    assert fortnight.high == 24.0
     assert fortnight.very_high == 4.0
     assert fortnight.extreme_high == 0.0
     assert fortnight.cv == 36.0
@@ -141,8 +162,8 @@ def test_summary_parses_periods() -> None:
     assert fortnight.delta.average_mmol == 0.4
     assert fortnight.delta.delta is None
     assert day.time_in_range == 62.0
-    assert day.low == 5.0
-    assert day.high == 25.0
+    assert day.low == 7.0
+    assert day.high == 31.0
     assert day.delta is None
 
 
@@ -202,8 +223,8 @@ async def test_summary_sensor_states_and_attributes(
     assert gmi.state == "6.8"
     assert gmi.attributes[ATTR_UNIT_OF_MEASUREMENT] == "%"
     assert _state(hass, "summary_cgm_1d_time_in_range").state == "62.0"
-    assert _state(hass, "summary_cgm_1d_low").state == "5.0"
-    assert _state(hass, "summary_cgm_1d_high").state == "25.0"
+    assert _state(hass, "summary_cgm_1d_low").state == "7.0"
+    assert _state(hass, "summary_cgm_1d_high").state == "31.0"
 
 
 @pytest.mark.parametrize(
@@ -542,3 +563,117 @@ def mock_slow_rest(aioclient_mock: AiohttpClientMocker, user_id: str = USER_ID) 
     """
     mock_slow(aioclient_mock, user_id=user_id)
     mock_profile(aioclient_mock, user_id=user_id)
+
+
+def _gets(aioclient_mock: AiohttpClientMocker, path: str) -> int:
+    return sum(
+        1
+        for method, url, _, _ in aioclient_mock.mock_calls
+        if method.lower() == "get" and url.path == path
+    )
+
+
+async def test_shared_patient_optional_403_degrades_without_extra_login(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Restricted sharing must not block the entry or cost extra logins."""
+    entry = await _setup_shared(hass, aioclient_mock, data_sources_status=403)
+
+    shared = entry.runtime_data.slow[PATIENT_ID]
+    assert shared.last_update_success
+    assert shared.data.summary("cgm", "14d") is not None
+    assert shared.data.data_sources == []
+    assert entry.runtime_data.auth_failed is False
+    assert _reauth_flows(hass) == []
+    assert login_posts(aioclient_mock) == 1
+    # No retry, and the other optional requests were skipped for this cycle
+    # (the profile was read once, by the setup that names the device).
+    assert _gets(aioclient_mock, f"/v1/users/{PATIENT_ID}/data_sources") == 1
+    assert _gets(aioclient_mock, f"/v1/users/{PATIENT_ID}/data_sets") == 0
+    assert _gets(aioclient_mock, f"/metadata/{PATIENT_ID}/profile") == 1
+    # The own account is untouched.
+    assert entry.runtime_data.slow[USER_ID].data.summary("cgm", "14d") is not None
+
+
+async def test_shared_patient_optional_403_keeps_earlier_optional_data(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    sources = [{"id": "fake-source-1"}]
+    aioclient_mock.get(f"{API_URL}/v1/users/{PATIENT_ID}/data_sources", json=sources)
+    entry = await _setup_shared(hass, aioclient_mock, data_sets_status=403)
+
+    shared = entry.runtime_data.slow[PATIENT_ID]
+    assert shared.last_update_success
+    assert shared.data.data_sources == sources
+    assert shared.data.data_sets == []
+    assert login_posts(aioclient_mock) == 1
+    assert _gets(aioclient_mock, f"/metadata/{PATIENT_ID}/profile") == 1
+
+
+async def test_own_account_optional_403_is_an_auth_failure(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    entry = await _loaded(hass, aioclient_mock)
+    mock_login(aioclient_mock)
+    aioclient_mock.get(f"{API_URL}/v1/users/{USER_ID}/data_sources", status=403)
+    mock_slow_rest(aioclient_mock)
+    slow = entry.runtime_data.slow[USER_ID]
+
+    await slow.async_refresh()
+    await hass.async_block_till_done()
+
+    assert not slow.last_update_success
+    assert entry.runtime_data.auth_failed is True
+    assert len(_reauth_flows(hass)) == 1
+    assert login_posts(aioclient_mock) == 1  # one silent re-login, no loop
+    assert _gets(aioclient_mock, f"/v1/users/{USER_ID}/data_sources") == 2
+
+
+async def test_optional_rate_limit_keeps_stale_data(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    entry = await _loaded(hass, aioclient_mock)
+    aioclient_mock.get(
+        f"{API_URL}/v1/users/{USER_ID}/data_sets",
+        status=429,
+        headers={"Retry-After": "7200"},
+    )
+    mock_slow_rest(aioclient_mock)
+    slow = entry.runtime_data.slow[USER_ID]
+    before = slow.data
+
+    await slow.async_refresh()
+
+    assert not slow.last_update_success
+    assert isinstance(slow.last_exception, UpdateFailed)
+    assert slow.data is before
+    assert entry.runtime_data.auth_failed is False
+
+
+async def test_bgm_server_error_leaves_no_bgm_summary(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """The bgm summary is optional: a failing server loses only that summary."""
+    entry = await _setup(hass, aioclient_mock, bgm_status=500)
+
+    slow = entry.runtime_data.slow[USER_ID]
+    assert slow.last_update_success
+    assert slow.data.summary("bgm", "14d") is None
+    assert slow.data.summary("cgm", "14d") is not None
+
+
+async def test_bgm_403_on_shared_patient_fails_like_the_cgm_summary(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Summary requests keep the existing rule; only the extras degrade on 403."""
+    entry = await _loaded(hass, aioclient_mock, patients=[USER_ID, PATIENT_ID])
+    mock_login(aioclient_mock)
+    aioclient_mock.get(f"{API_URL}/v1/summaries/bgm/{PATIENT_ID}", status=403)
+    mock_slow_rest(aioclient_mock, PATIENT_ID)
+    shared = entry.runtime_data.slow[PATIENT_ID]
+
+    await shared.async_refresh()
+
+    assert not shared.last_update_success
+    assert isinstance(shared.last_exception, UpdateFailed)
+    assert entry.runtime_data.auth_failed is False

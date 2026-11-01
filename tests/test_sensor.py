@@ -206,12 +206,14 @@ async def _setup_with_profiles(
 
 def _tidepool_entities(hass: HomeAssistant, entry: MockConfigEntry) -> list[str]:
     registry = er.async_get(hass)
-    # The glucose sensors; the summary sensors are covered by test_summary.py.
     return [
-        e.unique_id
-        for e in er.async_entries_for_config_entry(registry, entry.entry_id)
-        if "_summary_" not in e.unique_id
+        e.unique_id for e in er.async_entries_for_config_entry(registry, entry.entry_id)
     ]
+
+
+def _glucose_entities(hass: HomeAssistant, entry: MockConfigEntry) -> list[str]:
+    """The glucose sensors only; the summary sensors are in test_summary.py."""
+    return [e for e in _tidepool_entities(hass, entry) if "_summary_" not in e]
 
 
 @pytest.mark.parametrize(
@@ -241,7 +243,7 @@ async def test_profile_failure_retries_setup_without_registering(
     await hass.async_block_till_done(wait_background_tasks=True)
 
     assert entry.state is ConfigEntryState.LOADED
-    assert len(_tidepool_entities(hass, entry)) == 4
+    assert len(_glucose_entities(hass, entry)) == 4
     device = dr.async_get(hass).async_get_device_by_identifier(
         (DOMAIN, PATIENT_ID), entry.entry_id
     )
@@ -257,7 +259,7 @@ async def test_profile_refused_skips_only_that_patient(
     entry = await _setup_with_profiles(hass, aioclient_mock, status=403)
 
     assert entry.state is ConfigEntryState.LOADED
-    assert sorted(_tidepool_entities(hass, entry)) == [
+    assert sorted(_glucose_entities(hass, entry)) == [
         f"{USER_ID}_glucose",
         f"{USER_ID}_glucose_age",
     ]

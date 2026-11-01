@@ -87,13 +87,13 @@
         "name": "Time in range ({period})"
       },
       "summary_low": {
-        "name": "Time low ({period})"
+        "name": "Time below range ({period})"
       },
       "summary_very_low": {
         "name": "Time very low ({period})"
       },
       "summary_high": {
-        "name": "Time high ({period})"
+        "name": "Time above range ({period})"
       },
       "summary_very_high": {
         "name": "Time very high ({period})"

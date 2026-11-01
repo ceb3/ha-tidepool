@@ -103,8 +103,18 @@ SUMMARY_METRICS = (
     _Metric("gmi", lambda s: s.gmi, PERCENTAGE, enabled_periods=("14d",)),
     _Metric("cv", lambda s: s.cv, PERCENTAGE, enabled_periods=("14d",)),
     _Metric("sd", lambda s: s.sd_mmol, glucose=True),
-    _Metric("min", lambda s: s.min_mmol, glucose=True),
-    _Metric("max", lambda s: s.max_mmol, glucose=True),
+    _Metric(
+        "min",
+        lambda s: s.min_mmol,
+        glucose=True,
+        device_class=SensorDeviceClass.BLOOD_GLUCOSE_CONCENTRATION,
+    ),
+    _Metric(
+        "max",
+        lambda s: s.max_mmol,
+        glucose=True,
+        device_class=SensorDeviceClass.BLOOD_GLUCOSE_CONCENTRATION,
+    ),
     _Metric(
         "hours_with_data",
         lambda s: s.hours_with_data,

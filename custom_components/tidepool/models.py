@@ -127,7 +127,10 @@ def _percent(value: Any) -> float | None:
 class Summary:
     """One period of a Tidepool summary; a missing or malformed field is None.
 
-    Time in each range and ``cv`` are percentages (0-100), ``gmi`` is a
+    ``low`` and ``high`` are all time below and above range, including the
+    deeper bands; ``very_low``, ``very_high`` and ``extreme_high`` are those
+    bands alone, so they are parts of ``low`` and ``high``. Time in each range
+    and ``cv`` are percentages (0-100), ``gmi`` is a
     percentage as Tidepool sends it, glucose values stay in mmol/L as
     delivered. ``delta`` is the change against the previous period of the
     same length, in the same units.
@@ -166,9 +169,9 @@ def _parse_period(period: dict, *, with_delta: bool = True) -> Summary:
     delta = period.get("delta")
     return Summary(
         time_in_range=_range_percent(period, "inTarget"),
-        low=_range_percent(period, "inLow"),
+        low=_range_percent(period, "inAnyLow"),
         very_low=_range_percent(period, "inVeryLow"),
-        high=_range_percent(period, "inHigh"),
+        high=_range_percent(period, "inAnyHigh"),
         very_high=_range_percent(period, "inVeryHigh"),
         extreme_high=_range_percent(period, "inExtremeHigh"),
         average_mmol=_number(period.get("averageGlucoseMmol")),
