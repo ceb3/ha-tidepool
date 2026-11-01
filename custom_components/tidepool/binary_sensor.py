@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import override
+from typing import Any, override
 
 from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
@@ -11,9 +11,11 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from .coordinator import TidepoolConfigEntry, TidepoolFastCoordinator
 from .entity import TidepoolEntity
+from .models import basal_period, current_basal
 
 PARALLEL_UPDATES = 0
 
@@ -54,15 +56,23 @@ async def async_setup_entry(
 
 
 class DeliveryBinarySensor(TidepoolEntity[TidepoolFastCoordinator], BinarySensorEntity):
-    """On while the newest basal segment has the description's delivery type."""
+    """On while the newest basal segment has the description's delivery type.
+
+    Unknown once that segment ended more than ``BASAL_STALE_GRACE`` ago.
+    """
 
     entity_description: DeliveryBinarySensorDescription
 
     @property
     @override
     def is_on(self) -> bool | None:
-        basal = self.coordinator.data.latest.by_type.get("basal") or {}
-        delivery = basal.get("deliveryType")
+        latest = self.coordinator.data.latest
+        delivery = (current_basal(latest, dt_util.utcnow()) or {}).get("deliveryType")
         if not isinstance(delivery, str):
             return None
         return delivery == self.entity_description.delivery
+
+    @property
+    @override
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        return basal_period(self.coordinator.data.latest)

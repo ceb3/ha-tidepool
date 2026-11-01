@@ -134,6 +134,47 @@ def test_basal_24h_ignores_malformed_segments() -> None:
     assert basal_units(segments, NOW) == 1.0
 
 
+def test_basal_24h_suspend_clips_the_segment_before_it() -> None:
+    segments = [
+        # Cut short by the suspend 2 h in: 2 h x 1.0 = 2.0 U.
+        _basal("a", NOW - timedelta(hours=4), 3, "scheduled", 1.0),
+        _basal("b", NOW - timedelta(hours=2), 1, "suspend"),
+    ]
+
+    assert basal_units(segments, NOW) == 2.0
+
+
+@pytest.mark.parametrize("duration", [-1, None])
+def test_basal_24h_skips_a_middle_segment_without_duration(
+    duration: int | None,
+) -> None:
+    middle = _basal("b", NOW - timedelta(hours=4), 0, "temp", 5.0)
+    if duration is None:
+        del middle["duration"]
+    else:
+        middle["duration"] = duration
+    segments = [
+        # A new segment did start 2 h in, so it still ends this one: 2.0 U.
+        _basal("a", NOW - timedelta(hours=6), 4, "scheduled", 1.0),
+        # Unusable duration: delivers nothing.
+        middle,
+        # 1 h x 1.0 = 1.0 U.
+        _basal("c", NOW - timedelta(hours=2), 1, "scheduled", 1.0),
+    ]
+
+    assert basal_units(segments, NOW) == 3.0
+
+
+def test_basal_24h_ignores_future_segments() -> None:
+    segments = [
+        # Clipped to now: 1 h x 1.0 = 1.0 U.
+        _basal("a", NOW - timedelta(hours=1), 3, "scheduled", 1.0),
+        _basal("b", NOW + timedelta(hours=1), 1, "scheduled", 9.0),
+    ]
+
+    assert basal_units(segments, NOW) == 1.0
+
+
 # --- entities ------------------------------------------------------------
 
 
@@ -393,6 +434,51 @@ async def test_last_injection_and_last_activity(
     assert activity.attributes["device_class"] == "timestamp"
 
 
+BASAL_ENTITIES = (
+    ("sensor", "basal_rate"),
+    ("sensor", "basal_mode"),
+    ("binary_sensor", "automated_delivery_active"),
+    ("binary_sensor", "delivery_suspended"),
+)
+
+
+@pytest.mark.parametrize(
+    ("start", "hours", "current"),
+    [
+        # Running now.
+        (NOW - timedelta(minutes=10), 0.5, True),
+        # Ended 2 h ago: just inside the 2 h grace.
+        (NOW - timedelta(hours=3), 1, True),
+        # Ended 2 h and 1 s ago: stale.
+        (NOW - timedelta(hours=3, seconds=1), 1, False),
+        # No duration: ends at its time, so stale 2 h after it started.
+        (NOW - timedelta(hours=1), None, True),
+        (NOW - timedelta(hours=2, seconds=1), None, False),
+    ],
+)
+async def test_stale_basal_reads_unknown(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+    start: datetime,
+    hours: float | None,
+    current: bool,
+) -> None:
+    basal = _basal("b1", start, hours or 0, "automated", 0.6)
+    if hours is None:
+        del basal["duration"]
+    await _setup(hass, aioclient_mock, freezer, latest=[basal])
+
+    ends = start + timedelta(hours=hours or 0)
+    expected = ("0.6", "automated", "on", "off")
+    for (platform, key), value in zip(BASAL_ENTITIES, expected, strict=True):
+        state = _state(hass, key, platform)
+        assert state.state == (value if current else STATE_UNKNOWN), key
+        # The times stay visible either way, so a stale value can be explained.
+        assert state.attributes["time"] == start.isoformat(), key
+        assert state.attributes["ends"] == ends.isoformat(), key
+
+
 PUMP_SENSORS = (
     "basal_rate",
     "basal_mode",
@@ -468,9 +554,30 @@ async def test_window_request(
     assert len(windows) == 1
     # One request for all three types, at the same refresh as the latest.
     assert windows[0].query["type"] == "basal,bolus,food"
-    assert windows[0].query["startDate"] == "2026-10-31T12:00:00.000Z"
+    # 24 h plus a 12 h lookback for the basal segment running into the window.
+    assert windows[0].query["startDate"] == "2026-10-31T00:00:00.000Z"
     assert windows[0].query["endDate"] == "2026-11-01T12:00:00.000Z"
     assert latest_gets(aioclient_mock, USER_ID) == 1
+
+
+async def test_window_cold_start_counts_straddling_basal(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """After a restart there is no previous window: the lookback must bring
+    the segment that began before the 24 h and still runs into it."""
+    # 30 h..22 h ago at 1.0 U/h: 2 h of it inside the window.
+    straddling = _basal("ba1", NOW - DAY - timedelta(hours=6), 8, "scheduled", 1.0)
+    await _setup(hass, aioclient_mock, freezer, window=[straddling])
+
+    (window,) = [
+        url
+        for _, url, _, _ in aioclient_mock.mock_calls
+        if url.path == f"/data/{USER_ID}" and "type" in url.query
+    ]
+    assert window.query["startDate"] == "2026-10-31T00:00:00.000Z"
+    assert _state(hass, "insulin_basal_24h").state == "2.0"
 
 
 async def test_window_deduplicates_by_id(

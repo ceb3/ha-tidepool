@@ -31,10 +31,13 @@ from .models import (
     BASAL_DELIVERY_TYPES,
     SUMMARY_PERIODS,
     Summary,
+    basal_period,
     basal_units,
     carbs_on_board,
+    current_basal,
     delivered_bolus,
     insulin_on_board,
+    is_number,
     mmol_to_mgdl,
     net_carbs,
     newest_with,
@@ -187,26 +190,22 @@ class PumpSensorDescription(SensorEntityDescription):
     attrs_fn: Callable[[FastData], dict[str, Any] | None] = lambda _: None
 
 
-def _basal(data: FastData) -> dict | None:
-    """The newest basal segment: what the pump is (or last was) delivering."""
-    return data.latest.by_type.get("basal")
+def _basal_rate(data: FastData, now: datetime) -> float | None:
+    rate = (current_basal(data.latest, now) or {}).get("rate")
+    return float(rate) if is_number(rate) else None
 
 
-def _basal_rate(data: FastData, _now: datetime) -> float | None:
-    rate = (_basal(data) or {}).get("rate")
-    return float(rate) if isinstance(rate, int | float) else None
-
-
-def _basal_mode(data: FastData, _now: datetime) -> str | None:
-    delivery = (_basal(data) or {}).get("deliveryType")
+def _basal_mode(data: FastData, now: datetime) -> str | None:
+    delivery = (current_basal(data.latest, now) or {}).get("deliveryType")
     return delivery if delivery in BASAL_DELIVERY_TYPES else None
 
 
-def _basal_attrs(data: FastData) -> dict[str, Any] | None:
-    basal = _basal(data)
-    if basal is None:
+def _basal_rate_attrs(data: FastData) -> dict[str, Any] | None:
+    # Shown even when the segment is stale, so the unknown state is explained.
+    period = basal_period(data.latest)
+    if period is None:
         return None
-    return {"delivery": basal.get("deliveryType"), "time": _time_attr(basal)}
+    return {"delivery": data.latest.by_type["basal"].get("deliveryType"), **period}
 
 
 def _time_attr(record: dict) -> str:
@@ -288,7 +287,7 @@ def _newest_time(record_type: str) -> Callable[[FastData, datetime], Any]:
 def _injection_attrs(data: FastData) -> dict[str, Any] | None:
     dose = data.latest.by_type.get("insulin", {}).get("dose")
     total = dose.get("total") if isinstance(dose, dict) else None
-    return {"dose": total} if isinstance(total, int | float) else None
+    return {"dose": total} if is_number(total) else None
 
 
 def _on_board(
@@ -343,7 +342,7 @@ PUMP_SENSORS = (
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
         value_fn=_basal_rate,
-        attrs_fn=_basal_attrs,
+        attrs_fn=_basal_rate_attrs,
     ),
     PumpSensorDescription(
         key="basal_mode",
@@ -351,6 +350,7 @@ PUMP_SENSORS = (
         device_class=SensorDeviceClass.ENUM,
         options=list(BASAL_DELIVERY_TYPES),
         value_fn=_basal_mode,
+        attrs_fn=lambda data: basal_period(data.latest),
     ),
     # Single events carry no state class: their statistics would mean nothing.
     PumpSensorDescription(

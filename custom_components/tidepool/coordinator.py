@@ -35,6 +35,7 @@ from .const import (
     SLOW_INTERVAL,
 )
 from .models import (
+    BASAL_LOOKBACK,
     DAY,
     WINDOW_TYPES,
     Latest,
@@ -229,12 +230,14 @@ class TidepoolFastCoordinator(TidepoolCoordinator[FastData]):
     async def _async_fetch(self) -> FastData:
         payload = await self._call(lambda: self.client.latest(self.user_id))
         latest = parse_latest(payload)
-        # The whole 24 h is fetched again each time: pumps upload late, so
-        # records can appear with times before the previous refresh. A failing
-        # window request keeps the previous window rather than hiding latest.
+        # The whole 24 h (plus the basal lookback) is fetched again each time:
+        # pumps upload late, so records can appear with times before the
+        # previous refresh. A failing window request keeps the previous window
+        # rather than hiding latest.
         now = dt_util.utcnow()
+        start = now - DAY - BASAL_LOOKBACK
         fetched = await self._optional(
-            lambda: self.client.data(self.user_id, list(WINDOW_TYPES), now - DAY, now),
+            lambda: self.client.data(self.user_id, list(WINDOW_TYPES), start, now),
             [],
         )
         previous = self.data.window if self.data is not None else {}

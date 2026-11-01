@@ -52,7 +52,8 @@ def _record_time(record: Any) -> datetime | None:
         return None
 
 
-def _is_number(value: Any) -> bool:
+def is_number(value: Any) -> bool:
+    """Whether a JSON value is a number (a bool is not)."""
     return isinstance(value, int | float) and not isinstance(value, bool)
 
 
@@ -68,7 +69,7 @@ class Latest:
             return None
         time = _record_time(record)
         value = record.get("value")
-        if time is None or not _is_number(value):
+        if time is None or not is_number(value):
             return None
         record_id = record.get("id")
         return Cbg(
@@ -96,7 +97,7 @@ def parse_latest(payload: list[dict]) -> Latest:
         if time is None:
             continue
         record_type = record["type"]
-        if record_type in GLUCOSE_TYPES and not _is_number(record.get("value")):
+        if record_type in GLUCOSE_TYPES and not is_number(record.get("value")):
             continue
         current = newest.get(record_type)
         if current is None or time > current[0]:
@@ -113,11 +114,11 @@ _PERCENT = 100
 
 
 def _number(value: Any) -> float | None:
-    return float(value) if _is_number(value) else None
+    return float(value) if is_number(value) else None
 
 
 def _count(value: Any) -> int | None:
-    return int(value) if _is_number(value) else None
+    return int(value) if is_number(value) else None
 
 
 def _percent(value: Any) -> float | None:
@@ -210,6 +211,14 @@ def parse_summary(payload: Any) -> dict[str, Summary]:
 # The record types the fast coordinator keeps for the last 24 hours.
 WINDOW_TYPES = ("basal", "bolus", "food")
 DAY = timedelta(hours=24)
+# How far before the window the window request starts. Tidepool filters on a
+# record's start time, so without it the basal segment that began before the
+# window and runs into it would be missing after a restart. A single segment
+# longer than 24 h + this lookback can still be missed.
+BASAL_LOOKBACK = timedelta(hours=12)
+# How long after its end the newest basal segment still counts as current;
+# after that the pump's state is unknown rather than its last known state.
+BASAL_STALE_GRACE = timedelta(hours=2)
 
 # Basal delivery types (``deliveryType``) as the Tidepool data spec lists them.
 BASAL_DELIVERY_TYPES = ("automated", "scheduled", "suspend", "temp")
@@ -218,16 +227,43 @@ BASAL_DELIVERY_TYPES = ("automated", "scheduled", "suspend", "temp")
 def _duration(record: dict) -> timedelta | None:
     """Return a record's ``duration`` (milliseconds), or None if unusable."""
     value = record.get("duration")
-    if not _is_number(value) or value < 0:
+    if not is_number(value) or value < 0:
         return None
     return timedelta(milliseconds=value)
 
 
 def _record_end(record: dict, time: datetime) -> datetime:
-    """When a record stops mattering: a basal segment's end, else its time."""
+    """When a record stops mattering: a basal segment's end, else its time.
+
+    A basal segment without a usable duration ends at its time.
+    """
     if record["type"] == "basal":
         return time + (_duration(record) or timedelta())
     return time
+
+
+def basal_times(record: dict) -> tuple[datetime, datetime] | None:
+    """The start and end of a basal segment, or None if it has no usable time."""
+    time = _record_time(record)
+    return None if time is None else (time, _record_end(record, time))
+
+
+def basal_period(latest: Latest) -> dict[str, str] | None:
+    """The start and end of the newest basal segment, as ISO attributes."""
+    basal = latest.by_type.get("basal")
+    times = None if basal is None else basal_times(basal)
+    if times is None:
+        return None
+    return {"time": times[0].isoformat(), "ends": times[1].isoformat()}
+
+
+def current_basal(latest: Latest, now: datetime) -> dict | None:
+    """The newest basal segment, unless it ended more than the grace ago."""
+    basal = latest.by_type.get("basal")
+    times = None if basal is None else basal_times(basal)
+    if times is None or now > times[1] + BASAL_STALE_GRACE:
+        return None
+    return basal
 
 
 def merge_window(
@@ -278,7 +314,7 @@ def basal_units(segments: list[dict], now: datetime, window: timedelta = DAY) ->
     for index, (begin, segment) in enumerate(timed):
         rate = segment.get("rate")
         duration = _duration(segment)
-        if not _is_number(rate) or duration is None:
+        if not is_number(rate) or duration is None:
             continue
         end = min(begin + duration, now)
         if index + 1 < len(timed):
@@ -296,7 +332,7 @@ def delivered_bolus(record: dict) -> float | None:
     bolus was cancelled) are not delivered insulin and are ignored.
     """
     parts = [record.get(key) for key in ("normal", "extended")]
-    delivered = [float(part) for part in parts if _is_number(part)]
+    delivered = [float(part) for part in parts if is_number(part)]
     return sum(delivered) if delivered else None
 
 

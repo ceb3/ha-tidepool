@@ -498,6 +498,28 @@ async def test_summary_401_twice_triggers_reauth_with_one_login(
     assert aioclient_mock.call_count == 0
 
 
+async def test_one_relogin_per_slow_refresh(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """The cgm summary needed a silent re-login; a refusal of the next request
+    in the same refresh asks for reauth instead of signing in again."""
+    entry = await _loaded(hass, aioclient_mock)
+    mock_login(aioclient_mock)
+    _mock_summary_sequence(aioclient_mock, USER_ID, [401, 200])
+    aioclient_mock.get(f"{API_URL}/v1/summaries/bgm/{USER_ID}", status=401)
+    mock_slow_rest(aioclient_mock)
+    slow = entry.runtime_data.slow[USER_ID]
+
+    await slow.async_refresh()
+    await hass.async_block_till_done()
+
+    assert not slow.last_update_success
+    assert entry.runtime_data.auth_failed is True
+    assert len(_reauth_flows(hass)) == 1
+    assert login_posts(aioclient_mock) == 1
+    assert summary_gets(aioclient_mock, USER_ID, "bgm") == 1
+
+
 async def test_rejected_login_during_slow_refresh_is_not_retried(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
