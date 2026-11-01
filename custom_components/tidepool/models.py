@@ -54,8 +54,12 @@ def _record_time(record: Any) -> datetime | None:
 
 
 def is_number(value: Any) -> bool:
-    """Whether a JSON value is a number (a bool is not)."""
-    return isinstance(value, int | float) and not isinstance(value, bool)
+    """Whether a JSON value is a finite number (a bool, NaN or infinity is not)."""
+    return (
+        isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
 
 
 def parse_glucose(record: Any) -> Cbg | None:
@@ -228,14 +232,22 @@ BASAL_LOOKBACK = timedelta(hours=12)
 # after that the pump's state is unknown rather than its last known state.
 BASAL_STALE_GRACE = timedelta(hours=2)
 
+# A record lasting longer than this has no usable duration: it is malformed.
+MAX_DURATION = timedelta(days=7)
+
 # Basal delivery types (``deliveryType``) as the Tidepool data spec lists them.
 BASAL_DELIVERY_TYPES = ("automated", "scheduled", "suspend", "temp")
 
 
 def _duration(record: dict) -> timedelta | None:
-    """Return a record's ``duration`` (milliseconds), or None if unusable."""
+    """Return a record's ``duration`` (milliseconds), or None if unusable.
+
+    A negative, non-finite or absurd (over ``MAX_DURATION``) one is unusable.
+    """
     value = record.get("duration")
-    if not is_number(value) or value < 0:
+    if not is_number(value) or not 0 <= value <= MAX_DURATION / timedelta(
+        milliseconds=1
+    ):
         return None
     return timedelta(milliseconds=value)
 
@@ -243,10 +255,14 @@ def _duration(record: dict) -> timedelta | None:
 def _record_end(record: dict, time: datetime) -> datetime:
     """When a record stops mattering: a basal segment's end, else its time.
 
-    A basal segment without a usable duration ends at its time.
+    A basal segment without a usable duration (or one that would end past
+    the last representable time) ends at its time.
     """
     if record["type"] == "basal":
-        return time + (_duration(record) or timedelta())
+        try:
+            return time + (_duration(record) or timedelta())
+        except OverflowError:
+            return time
     return time
 
 

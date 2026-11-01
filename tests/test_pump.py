@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
@@ -29,7 +31,7 @@ from yarl import URL
 
 from custom_components.tidepool.api import RateLimitedError
 from custom_components.tidepool.const import DOMAIN
-from custom_components.tidepool.models import basal_units
+from custom_components.tidepool.models import basal_units, is_number, merge_window
 
 from .entries import (
     LATEST_QUERY,
@@ -174,6 +176,79 @@ def test_basal_24h_ignores_future_segments() -> None:
     ]
 
     assert basal_units(segments, NOW) == 1.0
+
+
+# --- malformed numbers ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value", [math.nan, math.inf, -math.inf, True, False, "1", None]
+)
+def test_is_number_rejects_non_finite_and_bool(value: Any) -> None:
+    assert not is_number(value)
+
+
+@pytest.mark.parametrize("value", [0, 1, -2.5, 1e6])
+def test_is_number_accepts_finite_numbers(value: float) -> None:
+    assert is_number(value)
+
+
+# Durations (milliseconds) that are no usable duration: not a number, or
+# absurdly long (over 7 days; 1e15 ms would overflow a datetime).
+BAD_DURATIONS = [math.nan, math.inf, 1e15, 8 * 24 * HOUR_MS]
+
+
+@pytest.mark.parametrize("duration", BAD_DURATIONS)
+def test_malformed_duration_is_skipped(duration: float) -> None:
+    bad = _basal("bad", NOW - timedelta(hours=3), 1, "scheduled", 5.0)
+    bad["duration"] = duration
+    good = _basal("good", NOW - timedelta(hours=1), 1, "scheduled", 1.0)
+
+    assert basal_units([bad, good], NOW) == 1.0
+    window = merge_window({}, [bad, good], NOW)
+    assert [r["id"] for r in window["basal"]] == ["bad", "good"]
+
+
+@pytest.mark.parametrize("rate", [math.nan, math.inf])
+def test_malformed_rate_is_skipped(rate: float) -> None:
+    bad = _basal("bad", NOW - timedelta(hours=3), 1, "scheduled", rate)
+    good = _basal("good", NOW - timedelta(hours=1), 1, "scheduled", 1.0)
+
+    assert basal_units([bad, good], NOW) == 1.0
+
+
+async def test_refresh_survives_malformed_numbers(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    def bad(record_id: str, **fields: Any) -> dict[str, Any]:
+        record = _basal(record_id, NOW - timedelta(hours=5), 1, "temp", 2.0)
+        return record | fields
+
+    good = _basal("good", NOW - timedelta(hours=2), 2, "scheduled", 1.0)
+    # Valid JSON: an overflowing and an absurd duration.
+    huge = bad("huge", duration=1e15)
+    window = [huge, bad("long", duration=8 * 24 * HOUR_MS), good]
+    entry = await _setup(hass, aioclient_mock, freezer, latest=[huge], window=window)
+
+    coordinator = entry.runtime_data.fast[USER_ID]
+    assert coordinator.last_update_success
+    assert _state(hass, "insulin_basal_24h").state == "2.0"
+
+    # NaN and Infinity are not JSON, but the client's parser (Python's) takes
+    # them; the test mocker's does not, so they are handed over directly.
+    nan = bad("nan", duration=math.nan)
+    window = [nan, bad("inf", duration=math.inf), bad("rate", rate=math.nan), good]
+    with (
+        patch.object(coordinator.client, "latest", AsyncMock(return_value=[nan])),
+        patch.object(coordinator.client, "data", AsyncMock(return_value=window)),
+    ):
+        await coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+    assert coordinator.last_update_success
+    assert _state(hass, "insulin_basal_24h").state == "2.0"
 
 
 # --- entities ------------------------------------------------------------
