@@ -10,7 +10,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from pytest_homeassistant_custom_component.test_util.aiohttp import (
     AiohttpClientMocker,
+    AiohttpClientMockResponse,
 )
+from yarl import URL
 
 from custom_components.tidepool.api import (
     AuthError,
@@ -77,11 +79,34 @@ async def test_token_reused_until_invalidated(
 async def test_concurrent_callers_share_one_login(
     aioclient_mock: AiohttpClientMocker, auth: LegacyAuth
 ) -> None:
-    _mock_login_ok(aioclient_mock)
+    reached_login = asyncio.Event()
+    release_login = asyncio.Event()
 
-    first, second = await asyncio.gather(auth.async_headers(), auth.async_headers())
+    async def slow_login(method: str, url: URL, data: object) -> object:
+        # Suspend inside the login so a second caller really queues on the lock.
+        reached_login.set()
+        await release_login.wait()
+        return AiohttpClientMockResponse(
+            method,
+            url,
+            json={"userid": USER_ID},
+            headers={"x-tidepool-session-token": TOKEN},
+        )
 
-    assert first == second == {"X-Tidepool-Session-Token": TOKEN}
+    aioclient_mock.post(LOGIN_URL, side_effect=slow_login)
+
+    first = asyncio.create_task(auth.async_headers())
+    await reached_login.wait()
+    second = asyncio.create_task(auth.async_headers())
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert not first.done()
+    assert not second.done()
+    release_login.set()
+
+    results = await asyncio.gather(first, second)
+
+    assert results == [{"X-Tidepool-Session-Token": TOKEN}] * 2
     assert aioclient_mock.call_count == 1
 
 
@@ -205,21 +230,36 @@ async def test_password_never_logged(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.DEBUG)
+    logging.getLogger(__name__).debug("sentinel")
+
+    # Success.
     _mock_login_ok(aioclient_mock)
     await auth.async_headers()
     await auth.async_invalidate()
 
+    # Wrong password.
     aioclient_mock.clear_requests()
     aioclient_mock.post(LOGIN_URL, status=401)
     with pytest.raises(AuthError):
         await auth.async_headers()
 
+    # Network error.
+    aioclient_mock.clear_requests()
+    aioclient_mock.post(LOGIN_URL, exc=aiohttp.ClientError())
+    with pytest.raises(TidepoolError):
+        await auth.async_headers()
+
+    assert any(record.getMessage() == "sentinel" for record in caplog.records)
+    formatter = logging.Formatter()
     for record in caplog.records:
-        text = record.getMessage()
+        # Formatting includes exception text and tracebacks.
+        text = formatter.format(record)
         assert PASSWORD not in text
         assert CREDENTIALS not in text
         assert EMAIL not in text
         assert TOKEN not in text
+        assert PASSWORD not in repr(record.args)
+        assert CREDENTIALS not in repr(record.args)
 
 
 async def test_secrets_not_in_repr_or_error_messages(
