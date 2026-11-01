@@ -836,3 +836,39 @@ async def test_only_unused_child_devices_can_be_removed(
         f"{USER_ID}_{new_pump}": False,
         f"{USER_ID}_{CGM_ID}": False,
     }
+
+
+@pytest.mark.parametrize("loaded", [False, True])
+async def test_no_device_removal_while_the_entry_is_not_loaded(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+    loaded: bool,
+) -> None:
+    """Without loaded data nothing tells whether a device is in use."""
+    freezer.move_to(NOW)
+    entry = password_entry(hass)
+    if loaded:
+        # Set up once, so runtime data exists, then fail the next setup.
+        mock_login(aioclient_mock)
+        _mock_patient(aioclient_mock, USER_ID, "Fake Owner", LATEST, DATA_SETS)
+        mock_slow(aioclient_mock, data_sets=DATA_SETS)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        aioclient_mock.clear_requests()
+        mock_login(aioclient_mock, status=500)
+        mock_latest(aioclient_mock, status=401)
+        assert not await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        assert entry.state is ConfigEntryState.SETUP_RETRY
+    devices = dr.async_get(hass)
+    device = devices.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, f"{USER_ID}_fake-old-device")},
+    )
+    patient = devices.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, USER_ID)}
+    )
+
+    for candidate in (device, patient):
+        assert not await async_remove_config_entry_device(hass, entry, candidate)

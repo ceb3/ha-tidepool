@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import logging
 
+from homeassistant.config_entries import (
+    SIGNAL_CONFIG_ENTRY_CHANGED,
+    ConfigEntry,
+    ConfigEntryChange,
+    ConfigEntryState,
+)
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.typing import ConfigType
 
 from .api import (
@@ -39,8 +46,27 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Register the services, which belong to the integration, not to an entry."""
+    """Register the services, which belong to the integration, not to an entry.
+
+    Also delete an entry's repair issue whenever the entry stops (unloaded,
+    disabled or reloading): the next setup raises it again if the sign-in is
+    still withdrawn. This is the only way to cover an entry that stopped
+    while retrying setup: Home Assistant neither calls ``async_unload_entry``
+    nor runs ``async_on_unload`` callbacks then (those already ran when the
+    setup attempt failed).
+    """
     async_setup_services(hass)
+
+    @callback
+    def _entry_changed(change: ConfigEntryChange, entry: ConfigEntry) -> None:
+        if (
+            change is ConfigEntryChange.UPDATED
+            and entry.domain == DOMAIN
+            and entry.state is ConfigEntryState.NOT_LOADED
+        ):
+            async_clear_login_withdrawn(hass, entry.entry_id)
+
+    async_dispatcher_connect(hass, SIGNAL_CONFIG_ENTRY_CHANGED, _entry_changed)
     return True
 
 
@@ -73,12 +99,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: TidepoolConfigEntry) -> 
 async def async_unload_entry(hass: HomeAssistant, entry: TidepoolConfigEntry) -> bool:
     """Unload a config entry; its coordinators shut down with it.
 
-    The repair issue goes too: the next setup raises it again if the sign-in
-    is still withdrawn.
+    The repair issue goes once the entry is not loaded (see ``async_setup``).
     """
-    if unloaded := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        async_clear_login_withdrawn(hass, entry.entry_id)
-    return unloaded
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: TidepoolConfigEntry) -> None:
@@ -96,8 +119,12 @@ async def async_remove_config_entry_device(
     """Allow removing a child device that the current data no longer shows.
 
     Patient devices and the devices behind the latest records stay; a removed
-    device in use would only be registered again on the next refresh.
+    device in use would only be registered again on the next refresh. While
+    the entry is not loaded nothing tells which devices are in use (a setup
+    being retried may even have left partial runtime data), so none goes.
     """
+    if entry.state is not ConfigEntryState.LOADED:
+        return False
     return not device.identifiers & identifiers_in_use(entry)
 
 

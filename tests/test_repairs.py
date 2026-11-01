@@ -6,7 +6,8 @@ import json
 import re
 from pathlib import Path
 
-from homeassistant.config_entries import ConfigEntryState
+import pytest
+from homeassistant.config_entries import ConfigEntryDisabler, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import UpdateFailed
@@ -195,6 +196,30 @@ async def test_issue_deleted_on_unload(
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
+    assert _issues(hass) == {}
+
+
+@pytest.mark.parametrize("how", ["unload", "disable"])
+async def test_issue_deleted_when_a_retrying_entry_stops(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, how: str
+) -> None:
+    """An entry retrying setup (login withdrawn) is unloaded or disabled."""
+    entry = password_entry(hass)
+    mock_login(aioclient_mock, status=410)
+    assert not await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert list(_issues(hass)) == [(DOMAIN, _issue_id(entry))]
+
+    if how == "unload":
+        assert await hass.config_entries.async_unload(entry.entry_id)
+    else:
+        assert await hass.config_entries.async_set_disabled_by(
+            entry.entry_id, ConfigEntryDisabler.USER
+        )
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.NOT_LOADED
     assert _issues(hass) == {}
 
 
