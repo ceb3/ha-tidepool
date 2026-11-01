@@ -19,6 +19,7 @@ from homeassistant.components.application_credentials import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.config_entry_oauth2_flow import (
+    MY_AUTH_CALLBACK_PATH,
     AbstractOAuth2Implementation,
     LocalOAuth2ImplementationWithPkce,
 )
@@ -72,6 +73,12 @@ async def async_get_auth_implementation(
 
 class TidepoolOAuth2Implementation(LocalOAuth2ImplementationWithPkce):
     """Authorization code flow with PKCE S256 and Tidepool's scopes."""
+
+    @property
+    @override
+    def redirect_uri(self) -> str:
+        """Always redirect via my.home-assistant.io, the registered redirect."""
+        return MY_AUTH_CALLBACK_PATH
 
     @property
     @override

@@ -56,8 +56,6 @@ def keycloak(aioclient_mock: AiohttpClientMocker) -> MockKeycloak:
 async def implementation(
     hass: HomeAssistant, keycloak: MockKeycloak
 ) -> LocalOAuth2ImplementationWithPkce:
-    # With the "my" integration loaded, HA redirects via my.home-assistant.io.
-    hass.config.components.add("my")
     impl = await async_get_auth_implementation(
         hass, DOMAIN, ClientCredential(CLIENT_ID, "")
     )
@@ -96,16 +94,25 @@ async def _sign_in(
     return token
 
 
+@pytest.mark.parametrize("my_loaded", [False, True])
 async def test_authorize_url_has_pkce_and_scopes(
+    hass: HomeAssistant,
     implementation: LocalOAuth2ImplementationWithPkce,
+    my_loaded: bool,
 ) -> None:
+    # The redirect must be my.home-assistant.io whether or not HA's "my"
+    # integration is loaded (HA's default would otherwise use the local URL).
+    if my_loaded:
+        hass.config.components.add("my")
+    assert ("my" in hass.config.components) is my_loaded
+
     url = URL(await implementation.async_generate_authorize_url("flow-1"))
 
     assert str(url.with_query(None)) == DOCUMENTED_AUTHORIZE_URL
     query = url.query
     assert query["response_type"] == "code"
     assert query["client_id"] == CLIENT_ID
-    assert query["redirect_uri"] == MY_AUTH_CALLBACK_PATH
+    assert query["redirect_uri"] == "https://my.home-assistant.io/redirect/oauth"
     assert query["code_challenge_method"] == "S256"
     expected_challenge = b64url(
         hashlib.sha256(implementation.code_verifier.encode("ascii")).digest()
@@ -329,7 +336,6 @@ async def test_no_secrets_in_logs(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.DEBUG)
-    hass.config.components.add("my")
     implementation = await async_get_auth_implementation(
         hass, DOMAIN, ClientCredential(CLIENT_ID, CLIENT_SECRET)
     )
