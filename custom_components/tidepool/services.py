@@ -151,7 +151,11 @@ class _HistoryImport:
                     if chunk_start <= reading.time < chunk_end
                 ]
                 self.hours += async_import_cbg_statistics(
-                    self._hass, user_id, readings, self._unit
+                    self._hass,
+                    user_id,
+                    readings,
+                    self._unit,
+                    name=runtime.names.get(user_id),
                 )
                 chunk_start = chunk_end
 

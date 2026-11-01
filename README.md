@@ -220,7 +220,7 @@ Adds hourly mean, lowest and highest glucose of past days to Home Assistant's lo
 | `entry` | no | The Tidepool entry to import. All signed-in entries if left empty. |
 | `days` | no | How many days back to import, from 1 to 90 (default 14). |
 
-- The statistic is `tidepool:<id>_glucose`, one per account, named "Tidepool glucose", where `<id>` is the account's Tidepool id in lower case with other characters replaced by underscores. You can find it in **Developer tools > Statistics** and pick it in a statistics graph card.
+- The statistic is `tidepool:<id>_glucose`, one per account, named "Tidepool glucose (<patient name>)" (plain "Tidepool glucose" if the name is unknown), where `<id>` is the account's Tidepool id in lower case with other characters replaced by underscores. You can find it in **Developer tools > Statistics** and pick it in a statistics graph card.
 - Only whole, finished hours are imported, in the Home Assistant glucose unit at the time of the import. If you change the unit system later, run the import again over the whole window so the hours are alike.
 - It is idempotent: importing the same days again replaces those hours and does not add them twice. If a run stops (for example because Tidepool limits requests), the hours already written stay and you can run it again.
 - Tidepool is read in requests of seven days each, oldest first.

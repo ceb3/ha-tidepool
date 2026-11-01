@@ -30,6 +30,17 @@ STATISTIC_NAME = "Tidepool glucose"
 HOUR = timedelta(hours=1)
 
 
+def statistic_name(patient: str | None) -> str:
+    """The statistic's display name: ``Tidepool glucose (<patient name>)``.
+
+    Without a known patient name it is plain ``Tidepool glucose``. Only the
+    name shown changes with the patient; the statistic id never does.
+    """
+    if patient is None or not patient.strip():
+        return STATISTIC_NAME
+    return f"{STATISTIC_NAME} ({patient.strip()})"
+
+
 def statistic_id(user_id: str) -> str:
     """Return the statistic id of a patient's glucose.
 
@@ -71,7 +82,12 @@ def hourly_statistics(
 
 @callback
 def async_import_cbg_statistics(
-    hass: HomeAssistant, user_id: str, records: Iterable[Cbg], unit: str
+    hass: HomeAssistant,
+    user_id: str,
+    records: Iterable[Cbg],
+    unit: str,
+    *,
+    name: str | None = None,
 ) -> int:
     """Write the hourly glucose statistics of ``records``; return the hours.
 
@@ -80,6 +96,7 @@ def async_import_cbg_statistics(
     statistic: after Home Assistant's unit system changes, hours imported
     before stay in the old unit while an import of the same hours replaces
     them in the new one, so re-import the whole window to make them alike.
+    ``name`` is the patient's display name (see ``statistic_name``).
     """
     rows = hourly_statistics(records, unit, dt_util.utcnow())
     if not rows:
@@ -87,7 +104,7 @@ def async_import_cbg_statistics(
     metadata = StatisticMetaData(
         mean_type=StatisticMeanType.ARITHMETIC,
         has_sum=False,
-        name=STATISTIC_NAME,
+        name=statistic_name(name),
         source=DOMAIN,
         statistic_id=statistic_id(user_id),
         unit_class=BloodGlucoseConcentrationConverter.UNIT_CLASS,

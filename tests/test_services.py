@@ -35,6 +35,7 @@ from custom_components.tidepool.models import Cbg
 from custom_components.tidepool.statistics import (
     async_import_cbg_statistics,
     statistic_id,
+    statistic_name,
 )
 
 from .entries import (
@@ -496,7 +497,7 @@ async def test_import_history_converts_to_the_unit_system(
         _read_metadata, hass, STATISTIC_ID
     )
     assert metadata["unit_of_measurement"] == unit
-    assert metadata["name"] == "Tidepool glucose"
+    assert metadata["name"] == "Tidepool glucose (Fake Owner)"
     assert metadata["source"] == "tidepool"
     assert metadata["unit_class"] == "blood_glucose_concentration"
     assert metadata["has_sum"] is False
@@ -530,6 +531,17 @@ async def test_import_history_covers_every_patient_of_every_entry(
         await _stored(hass, "tidepool:fake_patient_0002_glucose"),
     )
     assert [rows[0][1] for rows in both] == [5.0, 8.0]
+    # Each statistic is named after its patient; the ids stay id-based.
+    await async_wait_recording_done(hass)
+    names = [
+        (
+            await get_instance(hass).async_add_executor_job(
+                _read_metadata, hass, statistic
+            )
+        )["name"]
+        for statistic in (STATISTIC_ID, "tidepool:fake_patient_0002_glucose")
+    ]
+    assert names == ["Tidepool glucose (Fake Owner)", "Tidepool glucose (Fake Second)"]
 
     # Naming an entry leaves the other's patient alone.
     aioclient_mock.mock_calls.clear()
@@ -674,6 +686,18 @@ async def test_import_cbg_statistics_returns_the_hours_written(
     assert async_import_cbg_statistics(hass, USER_ID, [], "mmol/L") == 0
 
     assert await _stored(hass) == [(hour, 6.0, 5.0, 7.0)]
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("Fake Owner", "Tidepool glucose (Fake Owner)"),
+        (None, "Tidepool glucose"),
+        ("  ", "Tidepool glucose"),
+    ],
+)
+def test_statistic_name_per_patient(name: str | None, expected: str) -> None:
+    assert statistic_name(name) == expected
 
 
 # services.yaml and strings
