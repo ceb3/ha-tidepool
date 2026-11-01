@@ -5,3 +5,4 @@ __pycache__/
 .superpowers/
 *.egg-info
 uv.lock
+docs/superpowers/
