@@ -1,0 +1,78 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Sign in to Tidepool",
+        "description": "Choose how to sign in to your Tidepool account.",
+        "menu_options": {
+          "oauth": "Sign in with OAuth (recommended)",
+          "legacy": "Sign in with email and password (legacy)"
+        }
+      },
+      "pick_implementation": {
+        "title": "Pick the application credentials"
+      },
+      "legacy": {
+        "title": "Sign in with email and password (legacy)",
+        "description": "{disclaimer}",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        },
+        "data_description": {
+          "email": "The email address of your Tidepool account.",
+          "password": "The password of your Tidepool account."
+        }
+      },
+      "patients": {
+        "title": "Choose accounts",
+        "description": "Choose the Tidepool accounts to add. Your own account is selected by default; accounts that share their data with you are listed too.",
+        "data": {
+          "patients": "Accounts"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Sign in to Tidepool again",
+        "description": "The Tidepool sign-in for this entry no longer works. Sign in again with the same account.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "The email or password is not correct.",
+      "legacy_withdrawn": "Tidepool's email and password login did not answer as expected. Tidepool may have changed or withdrawn it. Sign in with OAuth instead.",
+      "cannot_connect": "Could not reach Tidepool. Try again later.",
+      "no_patients": "Choose at least one account.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "already_configured": "This Tidepool account is already configured.",
+      "already_in_progress": "A sign-in for this Tidepool account is already in progress.",
+      "cannot_connect": "Could not reach Tidepool. Try again later.",
+      "no_user_id": "The sign-in did not identify a Tidepool account.",
+      "wrong_account": "You signed in with a different Tidepool account. Sign in with the account this entry was set up with.",
+      "missing_configuration": "OAuth is not set up. Add application credentials for Tidepool first.",
+      "reauth_successful": "Signed in again successfully.",
+      "unknown": "Unexpected error."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Tidepool options",
+        "data": {
+          "patients": "Accounts",
+          "fast_interval": "Glucose refresh interval"
+        },
+        "data_description": {
+          "patients": "The Tidepool accounts to show in Home Assistant.",
+          "fast_interval": "How often to fetch the latest readings, in minutes (2 to 30)."
+        }
+      }
+    },
+    "error": {
+      "no_patients": "Choose at least one account."
+    }
+  }
+}

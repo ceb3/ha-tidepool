@@ -167,6 +167,15 @@ def _unverified_jwt_claims(token: Any) -> dict[str, Any] | None:
     return claims if isinstance(claims, dict) else None
 
 
+def token_user_id(token: dict[str, Any]) -> str | None:
+    """Return the user id from an OAuth token response's id or access token."""
+    for key in ("id_token", "access_token"):
+        claims = _unverified_jwt_claims(token.get(key))
+        if claims is not None and (user_id := extract_user_id(claims)):
+            return user_id
+    return None
+
+
 class OAuthAuth:
     """Auth from OAuth2 tokens on a config entry, refreshed with rotation.
 
@@ -196,12 +205,7 @@ class OAuthAuth:
     @property
     def user_id(self) -> str | None:
         """Return the user id read from the id token or the access token."""
-        token = self._session.token
-        for key in ("id_token", "access_token"):
-            claims = _unverified_jwt_claims(token.get(key))
-            if claims is not None and (user_id := extract_user_id(claims)):
-                return user_id
-        return None
+        return token_user_id(self._session.token)
 
     async def async_headers(self) -> dict[str, str]:
         """Return the access token header, refreshing the token first if needed."""
