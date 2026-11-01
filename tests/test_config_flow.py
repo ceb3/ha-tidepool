@@ -66,7 +66,6 @@ def mock_setup_entry() -> Generator[AsyncMock]:
         "custom_components.tidepool.async_setup_entry",
         new_callable=AsyncMock,
         return_value=True,
-        create=True,
     ) as mock:
         yield mock
 
