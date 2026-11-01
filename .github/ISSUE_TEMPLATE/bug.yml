@@ -1,0 +1,68 @@
+name: Bug report
+description: Something does not work as described in the README.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Do not paste health data or private details
+
+        Please do **not** put any of these in this issue, in a screenshot or in an attachment:
+
+        - glucose values, insulin or carb amounts, or any other health data
+        - Tidepool ids, names, email addresses, device ids or serial numbers
+        - passwords, tokens or anything else that signs in
+
+        Describe the problem in words, and use the counts-only diagnostics download below. Before you attach logs or diagnostics, read them and remove anything private.
+
+        Not sure whether it is a bug? See [Sign-in and limitations](https://github.com/ceb3/ha-tidepool#sign-in-and-limitations) and [Troubleshooting and FAQ](https://github.com/ceb3/ha-tidepool#troubleshooting-and-faq) first.
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      description: Settings > About.
+      placeholder: "2026.10.0"
+    validations:
+      required: true
+  - type: input
+    id: integration_version
+    attributes:
+      label: Integration version
+      description: In HACS, or `version` in `custom_components/tidepool/manifest.json`.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: Which entity or service, and what you saw. Do not include values.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: |
+        Settings > Devices & services > Tidepool, open the menu of the entry (the three dots) and choose **Download diagnostics**. The file holds counts and flags only. Read it, then paste its content here.
+      render: json
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log lines
+      description: |
+        Lines from Settings > System > Logs that mention `custom_components.tidepool`. Read them first and remove anything private.
+      render: text
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmation
+      options:
+        - label: I did not include health data, ids, names, email addresses, passwords or tokens anywhere in this issue.
+          required: true

@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Sign-in and limitations
+    url: https://github.com/ceb3/ha-tidepool#sign-in-and-limitations
+    about: Two-factor accounts, the stored password, and what to do if Tidepool withdraws the sign-in.
+  - name: Troubleshooting and FAQ
+    url: https://github.com/ceb3/ha-tidepool#troubleshooting-and-faq
+    about: Unknown or stale values, shared accounts, units and disabled entities.
+  - name: Privacy
+    url: https://github.com/ceb3/ha-tidepool#privacy
+    about: What the integration stores and what it sends.
