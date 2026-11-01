@@ -58,7 +58,7 @@ from .models import (
     net_carbs,
     newest_with,
     parse_time,
-    pump_local_time,
+    pump_zone,
     reported_states,
     window_sum,
 )
@@ -552,6 +552,8 @@ class RecordContext:
     local_time: datetime
     # The glucose unit of Home Assistant's unit system.
     unit: str
+    # How the pump's clock was found (``models.pump_zone``).
+    zone_basis: str
 
     def glucose(self, record: dict, value: Any) -> float | None:
         """A glucose value of the record, in Home Assistant's unit."""
@@ -610,6 +612,15 @@ def _schedule_value(
 
 def _setting_attrs(record: dict, _context: RecordContext) -> dict[str, Any]:
     return {"as_of": _time_attr(record), "note": SETTING_NOTE}
+
+
+def _zone_attrs(record: dict, context: RecordContext) -> dict[str, Any]:
+    """How the pump's clock a schedule is read on was found."""
+    return {"zone_basis": context.zone_basis}
+
+
+def _schedule_setting_attrs(record: dict, context: RecordContext) -> dict[str, Any]:
+    return _setting_attrs(record, context) | _zone_attrs(record, context)
 
 
 def _alert_value(key: str) -> Callable[[dict, RecordContext], float | None]:
@@ -704,32 +715,33 @@ RECORD_SENSORS = (
         "pumpSettings",
         _schedule_value("basalSchedules", "rate", sole=False),
         native_unit_of_measurement=BASAL_RATE_UNITS,
+        attrs_fn=_zone_attrs,
     ),
     _setting(
         "carb_ratio_now",
         "pumpSettings",
         _schedule_value("carbRatios", "amount"),
         native_unit_of_measurement="g/U",
-        attrs_fn=_setting_attrs,
+        attrs_fn=_schedule_setting_attrs,
     ),
     _glucose_setting(
         "sensitivity_now",
         "pumpSettings",
         _schedule_value("insulinSensitivities", "amount", glucose=True),
         per_insulin=True,
-        attrs_fn=_setting_attrs,
+        attrs_fn=_schedule_setting_attrs,
     ),
     _glucose_setting(
         "target_low_now",
         "pumpSettings",
         _schedule_value("bgTargets", "low", glucose=True),
-        attrs_fn=_setting_attrs,
+        attrs_fn=_schedule_setting_attrs,
     ),
     _glucose_setting(
         "target_high_now",
         "pumpSettings",
         _schedule_value("bgTargets", "high", glucose=True),
-        attrs_fn=_setting_attrs,
+        attrs_fn=_schedule_setting_attrs,
     ),
     _setting(
         "max_basal",
@@ -954,9 +966,9 @@ class RecordSensor(_MinuteTick, TidepoolEntity[TidepoolFastCoordinator], SensorE
 
     def _record_context(self, record: dict) -> RecordContext:
         us_units = self.hass.config.units is US_CUSTOMARY_SYSTEM
+        zone, basis = pump_zone(record, dt_util.get_default_time_zone())
         return RecordContext(
-            pump_local_time(record, dt_util.utcnow(), dt_util.get_default_time_zone()),
-            MGDL if us_units else MMOL,
+            dt_util.utcnow().astimezone(zone), MGDL if us_units else MMOL, basis
         )
 
     @property

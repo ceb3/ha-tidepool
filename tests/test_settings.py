@@ -14,6 +14,7 @@ import logging
 from datetime import UTC, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
@@ -39,6 +40,7 @@ from custom_components.tidepool.const import DOMAIN
 from custom_components.tidepool.models import (
     convert_glucose,
     pump_local_time,
+    pump_zone,
     value_at,
 )
 from custom_components.tidepool.sensor import AS_OF_NOTE, SETTING_NOTE
@@ -322,6 +324,52 @@ def test_pump_local_time_derivation(settings: dict, hour: int) -> None:
     assert local == NOW
 
 
+HOME = "America/New_York"  # UTC-4 in summer, UTC-5 in winter
+SUMMER = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
+WINTER = datetime(2026, 12, 1, 12, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("settings", "basis", "winter_hour"),
+    [
+        # Uploaded in summer at the home zone's summer offset: the pump was
+        # set to the home zone, so in winter it follows it to UTC-5.
+        ({"time": _iso(SUMMER), "timezoneOffset": -240}, "home_zone", 7),
+        ({"time": _iso(SUMMER), "scheduleTimeZoneOffset": -240}, "home_zone", 7),
+        # Uploaded in winter at the winter offset: the same zone.
+        ({"time": _iso(WINTER), "timezoneOffset": -300}, "home_zone", 7),
+        # Another offset than the home zone's then: kept fixed.
+        ({"time": _iso(SUMMER), "timezoneOffset": 120}, "fixed_offset", 14),
+        # The home zone's winter offset, but uploaded in summer: not the home
+        # zone (it was UTC-4 then), so kept fixed.
+        ({"time": _iso(SUMMER), "timezoneOffset": -300}, "fixed_offset", 7),
+        ({"time": _iso(SUMMER), "timezoneOffset": -360}, "fixed_offset", 6),
+        # Without a usable record time the offset cannot be matched.
+        ({"timezoneOffset": -240}, "fixed_offset", 8),
+        ({"time": "junk", "timezoneOffset": -240}, "fixed_offset", 8),
+        # A zone name wins; nothing at all is the home zone.
+        ({"timezone": "Europe/Paris", "timezoneOffset": -240}, "named_zone", 13),
+        ({"time": _iso(SUMMER)}, "home_zone", 7),
+    ],
+)
+def test_pump_zone_basis(settings: dict, basis: str, winter_hour: int) -> None:
+    home = ZoneInfo(HOME)
+
+    zone, found = pump_zone(settings, home)
+
+    assert found == basis
+    assert WINTER.astimezone(zone).hour == winter_hour
+
+
+def test_pump_local_time_follows_the_home_zone_across_dst() -> None:
+    settings = {"time": _iso(SUMMER), "timezoneOffset": -240}
+    home = ZoneInfo(HOME)
+
+    assert pump_local_time(settings, SUMMER, home).hour == 8
+    # Read in winter: an hour behind the fixed summer offset.
+    assert pump_local_time(settings, WINTER, home).hour == 7
+
+
 # --- glucose units ------------------------------------------------------
 
 
@@ -554,6 +602,7 @@ async def test_pump_zone_by_name_follows_daylight_saving_time(
 
     assert _state(hass, "scheduled_basal_now").state == "0.7"
     assert _state(hass, "target_low_now").state == "4.99"
+    assert _state(hass, "target_low_now").attributes["zone_basis"] == "named_zone"
     # Loading the zone's data must not block the event loop.
     assert not [
         r
@@ -574,6 +623,68 @@ async def test_schedule_without_a_clock_uses_home_assistant_zone(
 
     # 17:00 in Home Assistant's zone.
     assert _state(hass, "scheduled_basal_now").state == "1.0"
+    basis = _state(hass, "scheduled_basal_now").attributes["zone_basis"]
+    assert basis == "home_zone"
+
+
+SCHEDULE_NOW_KEYS = (
+    "scheduled_basal_now",
+    "carb_ratio_now",
+    "sensitivity_now",
+    "target_low_now",
+    "target_high_now",
+)
+
+
+async def test_schedule_follows_the_home_zone_across_dst(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """A summer upload at the home zone's offset, read in winter."""
+    await hass.config.async_set_time_zone(HOME)
+    settings = _pump_settings(time=_iso(SUMMER), timezoneOffset=-240)
+    entry = await _setup(hass, aioclient_mock, freezer, [settings])
+    fast = entry.runtime_data.fast[USER_ID]
+
+    # 05:30 at the pump in summer (UTC-4) and in winter (UTC-5); a fixed
+    # summer offset would make the winter one 06:30, when 1.0 starts.
+    for when in (
+        datetime(2026, 7, 16, 9, 30, tzinfo=UTC),
+        datetime(2026, 12, 1, 10, 30, tzinfo=UTC),
+    ):
+        freezer.move_to(when)
+        await fast.async_refresh()
+        await hass.async_block_till_done()
+        assert _state(hass, "scheduled_basal_now").state == "0.8", when
+    for key in SCHEDULE_NOW_KEYS:
+        assert _state(hass, key).attributes["zone_basis"] == "home_zone", key
+    # Only the sensors that follow the schedule carry it.
+    for key in ("active_schedule", "max_bolus", "insulin_model"):
+        assert "zone_basis" not in _state(hass, key).attributes, key
+
+
+async def test_schedule_keeps_a_fixed_offset_unlike_the_home_zone(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    await hass.config.async_set_time_zone(HOME)
+    # UTC+10 is not New York's offset at any time of year.
+    entry = await _setup(hass, aioclient_mock, freezer, FULL)
+    fast = entry.runtime_data.fast[USER_ID]
+
+    # 05:30 at UTC+10 on either side of New York's change: the same entry.
+    for when in (
+        datetime(2026, 7, 15, 19, 30, tzinfo=UTC),
+        datetime(2026, 11, 30, 19, 30, tzinfo=UTC),
+    ):
+        freezer.move_to(when)
+        await fast.async_refresh()
+        await hass.async_block_till_done()
+        assert _state(hass, "scheduled_basal_now").state == "0.8", when
+    for key in SCHEDULE_NOW_KEYS:
+        assert _state(hass, key).attributes["zone_basis"] == "fixed_offset", key
 
 
 @pytest.mark.parametrize(

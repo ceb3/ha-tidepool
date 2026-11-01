@@ -511,32 +511,56 @@ def convert_glucose(value: float, source: str, target: str) -> float:
     return round(value / GLUCOSE_FACTOR, 2)
 
 
-def pump_timezone(settings: dict, default: tzinfo) -> tzinfo:
-    """The time zone a pump's schedules are read in.
+# How the pump's clock was found (the ``zone_basis`` attribute).
+ZONE_NAMED = "named_zone"
+ZONE_HOME = "home_zone"
+ZONE_FIXED = "fixed_offset"
+
+
+def _settings_time(settings: dict) -> datetime | None:
+    raw = settings.get("time")
+    if not isinstance(raw, str):
+        return None
+    try:
+        return parse_time(raw)
+    except ValueError:
+        return None
+
+
+def pump_zone(settings: dict, home: tzinfo) -> tuple[tzinfo, str]:
+    """The time zone a pump's schedules are read in, and how it was found.
 
     From the settings record: its ``timezone`` name if it holds a known one
     (this follows daylight saving time), else ``scheduleTimeZoneOffset`` (the
     offset the schedules were made in; real records carry it though the spec
     does not list it for settings), else the record's ``timezoneOffset``, both
-    in minutes from UTC, else ``default``. An offset is a fixed one: it is the
-    offset when the pump uploaded.
+    in minutes from UTC, else ``home`` (Home Assistant's zone).
+
+    An offset alone is the offset when the pump uploaded. If ``home`` had that
+    same offset at the record's own time, the pump was set to the home zone
+    then, and the home zone is used, so daylight saving time is followed
+    (R21). Otherwise the offset is kept fixed.
     """
     name = settings.get("timezone")
     if isinstance(name, str):
         try:
-            return ZoneInfo(name)
+            return ZoneInfo(name), ZONE_NAMED
         except ZoneInfoNotFoundError, ValueError, OSError:
             pass
     for key in ("scheduleTimeZoneOffset", "timezoneOffset"):
         offset = settings.get(key)
         if is_number(offset) and abs(offset) < DAY / timedelta(minutes=1):
-            return timezone(timedelta(minutes=offset))
-    return default
+            fixed = timedelta(minutes=offset)
+            uploaded = _settings_time(settings)
+            if uploaded is not None and uploaded.astimezone(home).utcoffset() == fixed:
+                return home, ZONE_HOME
+            return timezone(fixed), ZONE_FIXED
+    return home, ZONE_HOME
 
 
 def pump_local_time(settings: dict, now: datetime, default: tzinfo) -> datetime:
-    """``now`` on the pump's clock (see ``pump_timezone``)."""
-    return now.astimezone(pump_timezone(settings, default))
+    """``now`` on the pump's clock (see ``pump_zone``)."""
+    return now.astimezone(pump_zone(settings, default)[0])
 
 
 def _time_of_day(local_time: time | timedelta | datetime) -> timedelta:
