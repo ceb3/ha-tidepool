@@ -19,7 +19,7 @@ SCRIPT = Path(__file__).parent.parent / "scripts" / "live_check.py"
 
 EMAIL = "fake.person@example.invalid"
 PASSWORD = "fake-password-hunter2"
-SESSION_TOKEN = "tok-secret-9f8e7d"
+SESSION_TOKEN = "tok-secret-9f8e7d"  # gitleaks:allow (synthetic)
 USER_ID = "zq7x1k2m9p"
 
 # Distinctive values that must never show up in the output.
