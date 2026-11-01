@@ -19,6 +19,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .api import (
     AuthError,
@@ -33,7 +34,15 @@ from .const import (
     DOMAIN,
     SLOW_INTERVAL,
 )
-from .models import Latest, Summary, parse_latest, parse_summary
+from .models import (
+    DAY,
+    WINDOW_TYPES,
+    Latest,
+    Summary,
+    merge_window,
+    parse_latest,
+    parse_summary,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,7 +52,7 @@ class FastData:
     """What one fast refresh produces for one patient."""
 
     latest: Latest
-    # Recent records per type; filled by a later refresh step, empty for now.
+    # The basal, bolus and food records of the last 24 hours, per type.
     window: dict[str, list[dict]] = field(default_factory=dict)
 
 
@@ -81,11 +90,16 @@ class TidepoolRuntime:
 type TidepoolConfigEntry = ConfigEntry[TidepoolRuntime]
 
 
+class _Withheld(Exception):
+    """A shared patient's sharing does not include an optional resource."""
+
+
 class TidepoolCoordinator[DataT](DataUpdateCoordinator[DataT]):
     """A coordinator of one patient that maps API failures to Home Assistant's.
 
     Subclasses fetch in ``_async_fetch``, calling the API through ``_call`` so
-    a refused request is retried once and every failure is handled alike.
+    a refused request is retried once per refresh and every failure is
+    handled alike.
     """
 
     config_entry: TidepoolConfigEntry
@@ -108,6 +122,9 @@ class TidepoolCoordinator[DataT](DataUpdateCoordinator[DataT]):
         )
         self.client = client
         self.user_id = user_id
+        # Whether this refresh already retried a refused request (signing in
+        # again); a refresh never retries twice.
+        self._retried = False
 
     async def _async_fetch(self) -> DataT:
         """Fetch this coordinator's data; implemented by subclasses."""
@@ -118,6 +135,7 @@ class TidepoolCoordinator[DataT](DataUpdateCoordinator[DataT]):
         runtime = self.config_entry.runtime_data
         if runtime.auth_failed:
             raise ConfigEntryAuthFailed("Tidepool credentials were rejected")
+        self._retried = False
         try:
             return await self._async_fetch()
         except AuthError as err:
@@ -137,19 +155,49 @@ class TidepoolCoordinator[DataT](DataUpdateCoordinator[DataT]):
     async def _call[T](
         self, request: Callable[[], Awaitable[T]], *, retry_403: bool = True
     ) -> T:
-        """Make a request, retrying once after a refused request.
+        """Make a request, retrying once per refresh after a refused request.
 
         A refused request has already invalidated the session, so the retry
         signs in again silently (an expired session token). A rejected login
         is not retried: it would only repeat the wrong credentials. A 403 is
-        retried unless ``retry_403`` is False.
+        retried unless ``retry_403`` is False. Once one request of a refresh
+        was retried, a later refusal in the same refresh is not: a session
+        refused right after signing in again needs reauth, not another login.
         """
         try:
             return await request()
         except AuthError as err:
-            if err.from_login or (err.status == 403 and not retry_403):
+            if err.from_login or self._retried or (err.status == 403 and not retry_403):
                 raise
+        self._retried = True
         return await request()
+
+    async def _optional[T](
+        self,
+        request: Callable[[], Awaitable[T]],
+        default: T,
+        *,
+        withhold: bool = False,
+    ) -> T:
+        """Make a request whose failure must not hide the rest of the refresh.
+
+        A missing resource or a failing server leaves the default. Refusals and
+        rate limits still count: they say something about the whole refresh.
+        With ``withhold`` a 403 is not one of them (the patient's sharing just
+        does not include this): it is not retried, so costs no extra login, and
+        raises ``_Withheld``.
+        """
+        try:
+            return await self._call(request, retry_403=not withhold)
+        except AuthError as err:
+            if withhold and err.status == 403 and not err.from_login:
+                raise _Withheld from err
+            raise
+        except RateLimitedError:
+            raise
+        except TidepoolError as err:
+            _LOGGER.debug("An optional request failed: %s", err)
+            return default
 
     def _retry_after_seconds(self, retry_after: float | None) -> float | None:
         """Delay the next refresh until ``Retry-After``, never below the interval.
@@ -180,11 +228,20 @@ class TidepoolFastCoordinator(TidepoolCoordinator[FastData]):
     @override
     async def _async_fetch(self) -> FastData:
         payload = await self._call(lambda: self.client.latest(self.user_id))
-        return FastData(latest=parse_latest(payload))
-
-
-class _Withheld(Exception):
-    """A shared patient's sharing does not include an optional resource."""
+        latest = parse_latest(payload)
+        # The whole 24 h is fetched again each time: pumps upload late, so
+        # records can appear with times before the previous refresh. A failing
+        # window request keeps the previous window rather than hiding latest.
+        now = dt_util.utcnow()
+        fetched = await self._optional(
+            lambda: self.client.data(self.user_id, list(WINDOW_TYPES), now - DAY, now),
+            [],
+        )
+        previous = self.data.window if self.data is not None else {}
+        newest = [latest.by_type[t] for t in WINDOW_TYPES if t in latest.by_type]
+        return FastData(
+            latest=latest, window=merge_window(previous, [*fetched, *newest], now)
+        )
 
 
 class TidepoolSlowCoordinator(TidepoolCoordinator[SlowData]):
@@ -225,29 +282,3 @@ class TidepoolSlowCoordinator(TidepoolCoordinator[SlowData]):
         except _Withheld:
             _LOGGER.debug("A shared patient withholds some optional data")
         return data
-
-    async def _optional[T](
-        self,
-        request: Callable[[], Awaitable[T]],
-        default: T,
-        *,
-        withhold: bool = False,
-    ) -> T:
-        """Make a request whose failure must not hide the summaries.
-
-        A missing resource or a failing server leaves the default. Refusals and
-        rate limits still count: they say something about the whole refresh.
-        With ``withhold`` a 403 is not one of them (the patient's sharing just
-        does not include this): it is not retried, so costs no extra login, and
-        raises ``_Withheld``.
-        """
-        try:
-            return await self._call(request, retry_403=not withhold)
-        except AuthError as err:
-            if withhold and err.status == 403 and not err.from_login:
-                raise _Withheld from err
-            raise
-        except RateLimitedError:
-            raise
-        except TidepoolError:
-            return default

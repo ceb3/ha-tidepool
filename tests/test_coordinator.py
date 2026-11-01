@@ -29,6 +29,7 @@ from .entries import (
     mock_login,
     mock_profile,
     mock_slow,
+    window_gets,
 )
 
 
@@ -59,7 +60,7 @@ async def test_fast_refresh_parses_latest(
     )
     assert coordinator.data.latest.smbg is not None
     assert coordinator.data.latest.smbg.id == "rec-3"
-    assert coordinator.data.window == {}
+    assert set(coordinator.data.window) == {"basal", "bolus", "food"}
 
     aioclient_mock.clear_requests()
     mock_latest(
@@ -74,9 +75,10 @@ async def test_fast_refresh_parses_latest(
     assert coordinator.data.latest.cbg is not None
     assert coordinator.data.latest.cbg.id == "rec-9"
     assert coordinator.data.latest.cbg.value_mmol == 7.2
-    # One request per refresh, and only the latest endpoint.
-    assert aioclient_mock.call_count == 1
+    # Two requests per refresh: the latest records and the 24 h window.
+    assert aioclient_mock.call_count == 2
     assert latest_gets(aioclient_mock, USER_ID) == 1
+    assert window_gets(aioclient_mock, USER_ID) == 1
 
 
 @pytest.mark.parametrize("status", [429, 500])
@@ -121,7 +123,7 @@ async def test_rate_limited_retry_after_delays_next_refresh(
 
     async_fire_time_changed(hass, now + timedelta(seconds=901))
     await hass.async_block_till_done()
-    assert aioclient_mock.call_count == 1
+    assert latest_gets(aioclient_mock, USER_ID) == 1
     assert coordinator.last_update_success
     unsub()
 
@@ -146,5 +148,5 @@ async def test_short_retry_after_keeps_the_normal_interval(
 
     async_fire_time_changed(hass, now + timedelta(minutes=5, seconds=1))
     await hass.async_block_till_done()
-    assert aioclient_mock.call_count == 1
+    assert latest_gets(aioclient_mock, USER_ID) == 1
     unsub()

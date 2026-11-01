@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .const import GLUCOSE_FACTOR
@@ -200,3 +202,169 @@ def parse_summary(payload: Any) -> dict[str, Summary]:
         for name, period in periods.items()
         if isinstance(period, dict)
     }
+
+
+# Insulin and carbs: only records Tidepool already holds are summed or clipped.
+# Nothing here estimates, predicts or suggests a dose.
+
+# The record types the fast coordinator keeps for the last 24 hours.
+WINDOW_TYPES = ("basal", "bolus", "food")
+DAY = timedelta(hours=24)
+
+# Basal delivery types (``deliveryType``) as the Tidepool data spec lists them.
+BASAL_DELIVERY_TYPES = ("automated", "scheduled", "suspend", "temp")
+
+
+def _duration(record: dict) -> timedelta | None:
+    """Return a record's ``duration`` (milliseconds), or None if unusable."""
+    value = record.get("duration")
+    if not _is_number(value) or value < 0:
+        return None
+    return timedelta(milliseconds=value)
+
+
+def _record_end(record: dict, time: datetime) -> datetime:
+    """When a record stops mattering: a basal segment's end, else its time."""
+    if record["type"] == "basal":
+        return time + (_duration(record) or timedelta())
+    return time
+
+
+def merge_window(
+    previous: dict[str, list[dict]],
+    records: Iterable[Any],
+    now: datetime,
+    window: timedelta = DAY,
+) -> dict[str, list[dict]]:
+    """Merge fetched records into the previous window and drop the expired.
+
+    Records are de-duplicated by type and ``id`` (the fetched copy wins);
+    records without an id or a usable time are skipped. A record is kept while
+    it ends inside the window, so a basal segment that started before the
+    window start stays as long as it runs into the window. Each type's list
+    is ordered by time.
+    """
+    start = now - window
+    merged: dict[tuple[str, str], tuple[datetime, dict]] = {}
+    for record in [r for rs in previous.values() for r in rs] + list(records):
+        time = _record_time(record)
+        if time is None or record["type"] not in WINDOW_TYPES:
+            continue
+        record_id = record.get("id")
+        if not isinstance(record_id, str):
+            continue
+        merged[(record["type"], record_id)] = (time, record)
+    result: dict[str, list[dict]] = {t: [] for t in WINDOW_TYPES}
+    for time, record in sorted(merged.values(), key=lambda item: item[0]):
+        if _record_end(record, time) >= start:
+            result[record["type"]].append(record)
+    return result
+
+
+def basal_units(segments: list[dict], now: datetime, window: timedelta = DAY) -> float:
+    """Sum the basal insulin delivered in ``[now - window, now]``.
+
+    Each segment delivers ``rate`` U/h for ``duration`` milliseconds, clipped
+    to the window and to the start of the next segment (a later segment
+    supersedes an overlapping one). A ``suspend`` segment has no rate and
+    delivers nothing; a segment without a duration is skipped.
+    """
+    start = now - window
+    timed = sorted(
+        ((time, s) for s in segments if (time := _record_time(s)) is not None),
+        key=lambda item: item[0],
+    )
+    total = 0.0
+    for index, (begin, segment) in enumerate(timed):
+        rate = segment.get("rate")
+        duration = _duration(segment)
+        if not _is_number(rate) or duration is None:
+            continue
+        end = min(begin + duration, now)
+        if index + 1 < len(timed):
+            end = min(end, timed[index + 1][0])
+        begin = max(begin, start)
+        if end > begin:
+            total += rate * ((end - begin) / timedelta(hours=1))
+    return total
+
+
+def delivered_bolus(record: dict) -> float | None:
+    """Units a bolus delivered: ``normal`` plus ``extended``.
+
+    ``expectedNormal`` and ``expectedExtended`` (what was programmed before a
+    bolus was cancelled) are not delivered insulin and are ignored.
+    """
+    parts = [record.get(key) for key in ("normal", "extended")]
+    delivered = [float(part) for part in parts if _is_number(part)]
+    return sum(delivered) if delivered else None
+
+
+def net_carbs(record: dict) -> float | None:
+    """Net carbohydrate grams of a food record, or None if it has none."""
+    nutrition = record.get("nutrition")
+    if not isinstance(nutrition, dict):
+        return None
+    carbohydrate = nutrition.get("carbohydrate")
+    if not isinstance(carbohydrate, dict):
+        return None
+    if carbohydrate.get("units", "grams") != "grams":
+        return None
+    return _number(carbohydrate.get("net"))
+
+
+def window_sum(
+    records: list[dict],
+    value_fn: Callable[[dict], float | None],
+    now: datetime,
+    window: timedelta = DAY,
+) -> float:
+    """Sum ``value_fn`` over the records timed in ``[now - window, now]``."""
+    start = now - window
+    return math.fsum(
+        value
+        for record in records
+        if (time := _record_time(record)) is not None
+        and start <= time <= now
+        and (value := value_fn(record)) is not None
+    )
+
+
+def newest_with[T](
+    records: Iterable[dict], value_fn: Callable[[dict], T | None]
+) -> tuple[T, datetime, dict] | None:
+    """Return the value, time and record of the newest record with a value."""
+    best: tuple[T, datetime, dict] | None = None
+    for record in records:
+        time = _record_time(record)
+        if time is None or (best is not None and time <= best[1]):
+            continue
+        value = value_fn(record)
+        if value is not None:
+            best = (value, time, record)
+    return best
+
+
+def _amount(value: Any) -> float | None:
+    """The ``amount`` of a dosing decision's on-board object."""
+    return _number(value.get("amount")) if isinstance(value, dict) else None
+
+
+def insulin_on_board(record: dict) -> float | None:
+    """Insulin on board as recorded by a dosing decision or bolus calculator.
+
+    A ``dosingDecision`` holds ``insulinOnBoard.amount``; a ``wizard`` (the
+    pump's bolus calculator) holds ``insulinOnBoard`` as a number.
+    """
+    if record.get("type") == "dosingDecision":
+        return _amount(record.get("insulinOnBoard"))
+    if record.get("type") == "wizard":
+        return _number(record.get("insulinOnBoard"))
+    return None
+
+
+def carbs_on_board(record: dict) -> float | None:
+    """Carbs on board as recorded by a dosing decision (``carbsOnBoard``)."""
+    if record.get("type") == "dosingDecision":
+        return _amount(record.get("carbsOnBoard"))
+    return None

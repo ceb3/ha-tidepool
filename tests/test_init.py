@@ -33,6 +33,7 @@ from custom_components.tidepool.coordinator import (
 
 from .entries import (
     EMAIL,
+    LATEST_QUERY,
     PASSWORD,
     PATIENT_ID,
     SESSION_TOKEN,
@@ -46,7 +47,9 @@ from .entries import (
     mock_login,
     mock_profile,
     mock_slow,
+    mock_window,
     oauth_entry,
+    window_gets,
 )
 from .mock_keycloak import MockKeycloak
 
@@ -95,8 +98,9 @@ async def test_setup_and_unload_entry(
         assert coordinator.user_id == user_id
         assert coordinator.update_interval == timedelta(minutes=5)
         assert coordinator.last_update_success
-        assert coordinator.data.window == {}
+        assert set(coordinator.data.window) == {"basal", "bolus", "food"}
         assert latest_gets(aioclient_mock, user_id) == 1
+        assert window_gets(aioclient_mock, user_id) == 1
     assert login_posts(aioclient_mock) == 1  # both patients share one session
 
     assert await hass.config_entries.async_unload(entry.entry_id)
@@ -174,7 +178,7 @@ async def test_one_auth_strategy_per_entry_oauth(
     data_calls = [
         call for call in aioclient_mock.mock_calls if "/data/" in str(call[1])
     ]
-    assert len(data_calls) == 2
+    assert len(data_calls) == 4  # latest and the 24 h window, per patient
     for call in data_calls:
         assert call[3][OAUTH_TOKEN_HEADER] == entry.data["token"]["access_token"]
 
@@ -332,7 +336,8 @@ def _mock_latest_sequence(
             )
         return AiohttpClientMockResponse(method, url, status=status)
 
-    aioclient_mock.get(latest_url(user_id), side_effect=respond)
+    aioclient_mock.get(latest_url(user_id), params=LATEST_QUERY, side_effect=respond)
+    mock_window(aioclient_mock, user_id)
 
 
 async def test_expired_session_relogs_in_silently(

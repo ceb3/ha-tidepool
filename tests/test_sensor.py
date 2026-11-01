@@ -212,8 +212,12 @@ def _tidepool_entities(hass: HomeAssistant, entry: MockConfigEntry) -> list[str]
 
 
 def _glucose_entities(hass: HomeAssistant, entry: MockConfigEntry) -> list[str]:
-    """The glucose sensors only; the summary sensors are in test_summary.py."""
-    return [e for e in _tidepool_entities(hass, entry) if "_summary_" not in e]
+    """The glucose sensors only; the others are in test_summary.py, test_pump.py."""
+    return [
+        e
+        for e in _tidepool_entities(hass, entry)
+        if e.endswith(("_glucose", "_glucose_age"))
+    ]
 
 
 @pytest.mark.parametrize(

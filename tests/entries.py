@@ -31,6 +31,11 @@ LOGIN_URL = f"{API_URL}/auth/login"
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
+# The query that tells the latest request from the 24 h window request; both
+# go to ``/data/{user_id}``.
+LATEST_QUERY = {"latest": "true"}
+WINDOW_QUERY = {"type": "basal,bolus,food"}
+
 
 def load_fixture(name: str) -> Any:
     return json.loads((FIXTURES / name).read_text())
@@ -57,14 +62,34 @@ def mock_latest(
     payload: list[dict] | None = None,
     status: int = 200,
     headers: dict[str, str] | None = None,
+    window: list[dict] | None = None,
+    window_status: int = 200,
 ) -> None:
+    """Mock a user's latest records and, by default, an empty 24 h window."""
+    url = latest_url(user_id)
     if status == 200:
         aioclient_mock.get(
-            latest_url(user_id),
+            url,
+            params=LATEST_QUERY,
             json=load_fixture("latest.json") if payload is None else payload,
         )
     else:
-        aioclient_mock.get(latest_url(user_id), status=status, headers=headers)
+        aioclient_mock.get(url, params=LATEST_QUERY, status=status, headers=headers)
+    mock_window(aioclient_mock, user_id, window, window_status)
+
+
+def mock_window(
+    aioclient_mock: AiohttpClientMocker,
+    user_id: str = USER_ID,
+    payload: list[dict] | None = None,
+    status: int = 200,
+) -> None:
+    """Mock the 24 h window request (basal, bolus and food) of a user."""
+    url = latest_url(user_id)
+    if status == 200:
+        aioclient_mock.get(url, params=WINDOW_QUERY, json=payload or [])
+    else:
+        aioclient_mock.get(url, params=WINDOW_QUERY, status=status)
 
 
 def mock_profile(
@@ -137,12 +162,22 @@ def login_posts(aioclient_mock: AiohttpClientMocker) -> int:
     )
 
 
-def latest_gets(aioclient_mock: AiohttpClientMocker, user_id: str) -> int:
+def _data_gets(aioclient_mock: AiohttpClientMocker, user_id: str, key: str) -> int:
     return sum(
         1
         for method, url, _, _ in aioclient_mock.mock_calls
-        if method.lower() == "get" and url.path == f"/data/{user_id}"
+        if method.lower() == "get"
+        and url.path == f"/data/{user_id}"
+        and key in url.query
     )
+
+
+def latest_gets(aioclient_mock: AiohttpClientMocker, user_id: str) -> int:
+    return _data_gets(aioclient_mock, user_id, "latest")
+
+
+def window_gets(aioclient_mock: AiohttpClientMocker, user_id: str) -> int:
+    return _data_gets(aioclient_mock, user_id, "type")
 
 
 def legacy_entry(

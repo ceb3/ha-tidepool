@@ -76,6 +76,14 @@
     }
   },
   "entity": {
+    "binary_sensor": {
+      "automated_delivery_active": {
+        "name": "Automated delivery"
+      },
+      "delivery_suspended": {
+        "name": "Delivery suspended"
+      }
+    },
     "sensor": {
       "glucose": {
         "name": "Glucose"
@@ -124,6 +132,48 @@
       },
       "summary_days_with_data": {
         "name": "Days with data ({period})"
+      },
+      "basal_rate": {
+        "name": "Basal rate"
+      },
+      "basal_mode": {
+        "name": "Basal mode",
+        "state": {
+          "automated": "Automated",
+          "scheduled": "Scheduled",
+          "suspend": "Suspended",
+          "temp": "Temporary"
+        }
+      },
+      "last_bolus": {
+        "name": "Last bolus"
+      },
+      "insulin_basal_24h": {
+        "name": "Basal insulin (24 h)"
+      },
+      "insulin_bolus_24h": {
+        "name": "Bolus insulin (24 h)"
+      },
+      "insulin_total_24h": {
+        "name": "Total insulin (24 h)"
+      },
+      "carbs_last": {
+        "name": "Last carbs"
+      },
+      "carbs_24h": {
+        "name": "Carbs (24 h)"
+      },
+      "last_injection": {
+        "name": "Last injection"
+      },
+      "last_activity": {
+        "name": "Last activity"
+      },
+      "iob_at_last_decision": {
+        "name": "Insulin on board at last dosing decision"
+      },
+      "cob_at_last_decision": {
+        "name": "Carbs on board at last dosing decision"
       }
     }
   }
