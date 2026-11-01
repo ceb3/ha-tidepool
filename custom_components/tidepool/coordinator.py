@@ -44,6 +44,8 @@ class TidepoolRuntime:
     # coordinator of the entry then fails without calling the API until the
     # entry is reloaded (after reauth), so one bad password costs one login.
     auth_failed: bool = False
+    # Device name per patient; a patient missing here gets no entities.
+    names: dict[str, str] = field(default_factory=dict)
 
 
 type TidepoolConfigEntry = ConfigEntry[TidepoolRuntime]

@@ -12,6 +12,7 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
 from custom_components.tidepool.api import (
     ApiShapeError,
     AuthError,
+    NotFoundError,
     RateLimitedError,
     TidepoolClient,
     TidepoolError,
@@ -147,6 +148,19 @@ async def test_500_raises_tidepool_error(
     assert USER_ID not in str(excinfo.value)
     assert auth.invalidations == 0
     assert aioclient_mock.call_count == 1
+
+
+async def test_404_raises_not_found_error(
+    aioclient_mock: AiohttpClientMocker, client: TidepoolClient, auth: FakeAuth
+) -> None:
+    aioclient_mock.get(f"{API_URL}/metadata/{USER_ID}/profile", status=404)
+
+    with pytest.raises(NotFoundError) as excinfo:
+        await client.profile(USER_ID)
+
+    assert "404" in str(excinfo.value)
+    assert USER_ID not in str(excinfo.value)
+    assert auth.invalidations == 0
 
 
 async def test_non_list_payload_raises_shape_error(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import EntityDescription
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
@@ -15,11 +16,15 @@ class TidepoolEntity(CoordinatorEntity[TidepoolFastCoordinator]):
     _attr_has_entity_name = True
 
     def __init__(
-        self, coordinator: TidepoolFastCoordinator, key: str, device_name: str
+        self,
+        coordinator: TidepoolFastCoordinator,
+        description: EntityDescription,
+        device_name: str,
     ) -> None:
         super().__init__(coordinator)
+        self.entity_description = description
         user_id = coordinator.user_id
-        self._attr_unique_id = f"{user_id}_{key}"
+        self._attr_unique_id = f"{user_id}_{description.key}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, user_id)},
             name=device_name,

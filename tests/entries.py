@@ -71,10 +71,16 @@ def mock_profile(
     aioclient_mock: AiohttpClientMocker,
     user_id: str = USER_ID,
     full_name: str | None = "Fake Owner",
+    status: int = 200,
+    exc: Exception | None = None,
 ) -> None:
     """Mock a user's profile; a ``None`` name means the user has no profile."""
     url = f"{API_URL}/metadata/{user_id}/profile"
-    if full_name is None:
+    if exc is not None:
+        aioclient_mock.get(url, exc=exc)
+    elif status != 200:
+        aioclient_mock.get(url, status=status)
+    elif full_name is None:
         aioclient_mock.get(url, status=404)
     else:
         aioclient_mock.get(url, json={"fullName": full_name})

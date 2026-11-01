@@ -2,17 +2,33 @@
 
 from __future__ import annotations
 
+import logging
+
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.config_entry_oauth2_flow import (
     async_get_config_entry_implementation,
 )
 
-from .api import AuthStrategy, TidepoolClient
+from .api import (
+    AuthError,
+    AuthStrategy,
+    NotFoundError,
+    TidepoolClient,
+    TidepoolError,
+)
 from .auth import LegacyAuth, OAuthAuth
-from .const import AUTH_METHOD_LEGACY, CONF_AUTH_METHOD, CONF_PATIENTS
+from .const import (
+    AUTH_METHOD_LEGACY,
+    CONF_AUTH_METHOD,
+    CONF_PATIENTS,
+    DEFAULT_DEVICE_NAME,
+)
 from .coordinator import TidepoolConfigEntry, TidepoolFastCoordinator, TidepoolRuntime
+
+_LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
@@ -32,6 +48,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: TidepoolConfigEntry) -> 
         runtime.fast[user_id] = coordinator
         await coordinator.async_config_entry_first_refresh()
 
+    for user_id in patients:
+        await _async_name_patient(runtime, user_id)
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
@@ -39,6 +58,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: TidepoolConfigEntry) -> 
 async def async_unload_entry(hass: HomeAssistant, entry: TidepoolConfigEntry) -> bool:
     """Unload a config entry; its coordinators shut down with it."""
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def _async_name_patient(runtime: TidepoolRuntime, user_id: str) -> None:
+    """Name a patient's device after the profile; fall back if it has no name.
+
+    The name ends up in entity ids, so a passing failure must retry the whole
+    setup rather than register a fallback. A missing profile (404) or a blank
+    name is a stable result. A refused profile is not an entry-level auth
+    failure: that patient is skipped and the others carry on.
+    """
+    try:
+        name = (await runtime.client.profile(user_id)).get("fullName")
+    except NotFoundError:
+        name = None
+    except AuthError:
+        _LOGGER.warning("Skipping a patient whose profile Tidepool refused to share")
+        return
+    except TidepoolError as err:
+        raise ConfigEntryNotReady("could not read a patient profile") from err
+    if isinstance(name, str) and name.strip():
+        runtime.names[user_id] = name.strip()
+    else:
+        runtime.names[user_id] = DEFAULT_DEVICE_NAME
 
 
 async def _async_auth_strategy(

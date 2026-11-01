@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
+import aiohttp
 import pytest
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.config_entries import ConfigEntryState
@@ -31,6 +34,7 @@ from .entries import (
     USER_ID,
     latest_gets,
     legacy_entry,
+    login_posts,
     mock_latest,
     mock_login,
     mock_profile,
@@ -174,6 +178,99 @@ async def test_device_name_falls_back_without_profile(
 
     device = dr.async_get(hass).async_get_device_by_identifier(
         (DOMAIN, USER_ID), entry.entry_id
+    )
+    assert device is not None
+    assert device.name == "Tidepool patient"
+
+
+async def _setup_with_profiles(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    **second_profile: Any,
+) -> MockConfigEntry:
+    """Set up two patients; the first has a good profile, the second as given."""
+    entry = legacy_entry(hass, patients=[USER_ID, PATIENT_ID])
+    mock_login(aioclient_mock)
+    mock_latest(aioclient_mock, USER_ID)
+    mock_latest(aioclient_mock, PATIENT_ID)
+    mock_profile(aioclient_mock, USER_ID)
+    mock_profile(aioclient_mock, PATIENT_ID, **second_profile)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return entry
+
+
+def _tidepool_entities(hass: HomeAssistant, entry: MockConfigEntry) -> list[str]:
+    registry = er.async_get(hass)
+    return [
+        e.unique_id for e in er.async_entries_for_config_entry(registry, entry.entry_id)
+    ]
+
+
+@pytest.mark.parametrize(
+    "profile",
+    [{"status": 429}, {"status": 500}, {"exc": aiohttp.ClientConnectionError()}],
+)
+async def test_profile_failure_retries_setup_without_registering(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, profile: dict[str, Any]
+) -> None:
+    """A transient profile failure must not bake a fallback name into entity ids.
+
+    The entry goes to SETUP_RETRY and Home Assistant sets it up again later.
+    """
+    entry = await _setup_with_profiles(hass, aioclient_mock, **profile)
+
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert _tidepool_entities(hass, entry) == []
+
+    # Once Tidepool answers, the retry registers both patients by their names.
+    aioclient_mock.clear_requests()
+    mock_login(aioclient_mock)
+    for patient in (USER_ID, PATIENT_ID):
+        mock_latest(aioclient_mock, patient)
+        mock_profile(aioclient_mock, patient, full_name=f"Fake {patient[-4:]}")
+    async_fire_time_changed(hass, datetime.now(UTC) + timedelta(seconds=10))
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert len(_tidepool_entities(hass, entry)) == 4
+    device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, PATIENT_ID), entry.entry_id
+    )
+    assert device is not None
+    assert device.name == "Fake 0002"
+
+
+async def test_profile_refused_skips_only_that_patient(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    entry = await _setup_with_profiles(hass, aioclient_mock, status=403)
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert sorted(_tidepool_entities(hass, entry)) == [
+        f"{USER_ID}_glucose",
+        f"{USER_ID}_glucose_age",
+    ]
+    assert entry.runtime_data.auth_failed is False
+    # The refused request invalidated the shared session, so the next request
+    # (the following refresh) signs in again; setup itself needed one login.
+    assert login_posts(aioclient_mock) == 1
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("profile" in r.getMessage() for r in warnings)
+    for record in caplog.records:
+        assert PATIENT_ID not in record.getMessage()
+
+
+async def test_profile_404_uses_fallback_name(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    entry = await _setup_with_profiles(hass, aioclient_mock, status=404)
+
+    assert entry.state is ConfigEntryState.LOADED
+    device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, PATIENT_ID), entry.entry_id
     )
     assert device is not None
     assert device.name == "Tidepool patient"

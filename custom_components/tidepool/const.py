@@ -15,6 +15,9 @@ GLUCOSE_FACTOR: Final = 18.0182
 # Bearer``. Only ``auth.oauth_token_headers`` may use this constant.
 OAUTH_TOKEN_HEADER: Final = "X-Tidepool-Session-Token"
 
+# Device name of a patient whose Tidepool profile has no name.
+DEFAULT_DEVICE_NAME: Final = "Tidepool patient"
+
 # Config entry data and options keys.
 CONF_AUTH_METHOD: Final = "auth_method"
 CONF_PATIENTS: Final = "patients"

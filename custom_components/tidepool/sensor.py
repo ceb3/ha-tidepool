@@ -18,14 +18,12 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
 
-from .api import TidepoolClient, TidepoolError
-from .coordinator import TidepoolConfigEntry, TidepoolFastCoordinator
+from .coordinator import TidepoolConfigEntry
 from .entity import TidepoolEntity
 from .models import mmol_to_mgdl
 
 # Tidepool reports glucose in mmol/L whatever the account's display setting.
 SOURCE_UNITS = "mmol/L"
-DEFAULT_DEVICE_NAME = "Tidepool patient"
 # How often the age of the newest reading is re-evaluated without new data.
 AGE_INTERVAL = timedelta(minutes=1)
 
@@ -54,40 +52,21 @@ async def async_setup_entry(
     """Add the sensors of every selected patient."""
     runtime = entry.runtime_data
     entities: list[SensorEntity] = []
-    for user_id, coordinator in runtime.fast.items():
-        name = await _async_device_name(runtime.client, user_id)
+    for user_id, name in runtime.names.items():
+        coordinator = runtime.fast[user_id]
         entities.append(GlucoseSensor(coordinator, GLUCOSE, name))
         entities.append(GlucoseAgeSensor(coordinator, GLUCOSE_AGE, name))
     async_add_entities(entities)
 
 
-async def _async_device_name(client: TidepoolClient, user_id: str) -> str:
-    """Name a patient's device after the profile, if there is a usable one."""
-    try:
-        name = (await client.profile(user_id)).get("fullName")
-    except TidepoolError:
-        return DEFAULT_DEVICE_NAME
-    if isinstance(name, str) and name.strip():
-        return name.strip()
-    return DEFAULT_DEVICE_NAME
-
-
 class GlucoseSensor(TidepoolEntity, SensorEntity):
     """The newest continuous glucose reading, in the Home Assistant unit system."""
-
-    def __init__(
-        self,
-        coordinator: TidepoolFastCoordinator,
-        description: SensorEntityDescription,
-        device_name: str,
-    ) -> None:
-        super().__init__(coordinator, description.key, device_name)
-        self.entity_description = description
 
     @property
     def _us_units(self) -> bool:
         return self.hass.config.units is US_CUSTOMARY_SYSTEM
 
+    # The unit follows Home Assistant's unit system, not a per-entity choice.
     @property
     @override
     def native_unit_of_measurement(self) -> str:
@@ -113,19 +92,12 @@ class GlucoseSensor(TidepoolEntity, SensorEntity):
 class GlucoseAgeSensor(TidepoolEntity, SensorEntity):
     """Whole minutes since the newest glucose reading."""
 
-    def __init__(
-        self,
-        coordinator: TidepoolFastCoordinator,
-        description: SensorEntityDescription,
-        device_name: str,
-    ) -> None:
-        super().__init__(coordinator, description.key, device_name)
-        self.entity_description = description
-
     @override
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        # The age grows even when a refresh brings nothing new.
+        # The age grows even when a refresh brings nothing new. The tick runs a
+        # minute after the entity was added, not on the minute the reading is
+        # due, so the shown age can trail the true age by up to a minute.
         self.async_on_remove(
             async_track_time_interval(self.hass, self._async_tick, AGE_INTERVAL)
         )

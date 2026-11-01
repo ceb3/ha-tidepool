@@ -46,6 +46,10 @@ class RateLimitedError(TidepoolError):
         self.retry_after = retry_after
 
 
+class NotFoundError(TidepoolError):
+    """The API has nothing at the requested path (HTTP 404)."""
+
+
 class ApiShapeError(TidepoolError):
     """The API returned a payload of an unexpected shape."""
 
@@ -185,6 +189,8 @@ class TidepoolClient:
                         f"GET {pattern} rate limited ({status})",
                         _parse_retry_after(response.headers.get("Retry-After")),
                     )
+                if status == 404:
+                    raise NotFoundError(f"GET {pattern} found nothing ({status})")
                 if status != 200:
                     raise TidepoolError(f"GET {pattern} failed ({status})")
                 try:
