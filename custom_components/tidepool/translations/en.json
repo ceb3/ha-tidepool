@@ -67,6 +67,9 @@
       },
       "delivery_suspended": {
         "name": "Delivery suspended"
+      },
+      "data_source": {
+        "name": "{provider} connection"
       }
     },
     "sensor": {
@@ -159,6 +162,45 @@
       },
       "cob_at_last_decision": {
         "name": "Carbs on board at last dosing decision"
+      },
+      "last_data_cbg": {
+        "name": "Last CGM data"
+      },
+      "last_data_basal": {
+        "name": "Last basal data"
+      },
+      "last_data_bolus": {
+        "name": "Last bolus data"
+      },
+      "last_data_smbg": {
+        "name": "Last fingerstick data"
+      },
+      "last_data_food": {
+        "name": "Last food data"
+      },
+      "last_data_insulin": {
+        "name": "Last injection data"
+      },
+      "last_data_physical_activity": {
+        "name": "Last activity data"
+      },
+      "last_data_device_event": {
+        "name": "Last device event"
+      },
+      "last_data_pump_settings": {
+        "name": "Last pump settings"
+      },
+      "last_data_cgm_settings": {
+        "name": "Last CGM settings"
+      },
+      "last_data_wizard": {
+        "name": "Last bolus calculator data"
+      },
+      "last_data_upload": {
+        "name": "Last upload record"
+      },
+      "last_upload": {
+        "name": "Last upload"
       }
     }
   }

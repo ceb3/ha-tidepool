@@ -24,6 +24,7 @@ from .coordinator import (
     TidepoolRuntime,
     TidepoolSlowCoordinator,
 )
+from .devices import async_setup_devices
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: TidepoolConfigEntry) -> 
             runtime.slow[user_id] = slow
             await slow.async_config_entry_first_refresh()
 
+    async_setup_devices(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 

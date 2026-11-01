@@ -114,11 +114,14 @@ def mock_slow(
     bgm_status: int = 404,
     data_sources_status: int = 200,
     data_sets_status: int = 200,
+    data_sources: list[dict] | None = None,
+    data_sets: list[dict] | None = None,
 ) -> None:
     """Mock a user's slow endpoints: a synthetic cgm summary, no bgm summary.
 
     A ``None`` ``cgm`` means the fixture; an empty dict is an empty summary.
-    Profile is mocked by ``mock_profile``.
+    Data sources and sets are empty unless given. Profile is mocked by
+    ``mock_profile``.
     """
     base = f"{API_URL}/v1/summaries"
     aioclient_mock.get(
@@ -129,13 +132,13 @@ def mock_slow(
         aioclient_mock.get(f"{base}/bgm/{user_id}", json={"periods": {}})
     else:
         aioclient_mock.get(f"{base}/bgm/{user_id}", status=bgm_status)
-    for name, status in (
-        ("data_sources", data_sources_status),
-        ("data_sets", data_sets_status),
+    for name, status, payload in (
+        ("data_sources", data_sources_status, data_sources),
+        ("data_sets", data_sets_status, data_sets),
     ):
         url = f"{API_URL}/v1/users/{user_id}/{name}"
         if status == 200:
-            aioclient_mock.get(url, json=[])
+            aioclient_mock.get(url, json=payload or [])
         else:
             aioclient_mock.get(url, status=status)
 

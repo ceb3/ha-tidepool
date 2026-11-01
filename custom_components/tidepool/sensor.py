@@ -26,6 +26,7 @@ from .coordinator import (
     TidepoolFastCoordinator,
     TidepoolSlowCoordinator,
 )
+from .devices import DeviceRole, upload_time
 from .entity import TidepoolEntity
 from .models import (
     BASAL_DELIVERY_TYPES,
@@ -179,7 +180,7 @@ AS_OF_NOTE = "As of the last dosing decision; not a live value."
 
 
 @dataclass(frozen=True, kw_only=True)
-class PumpSensorDescription(SensorEntityDescription):
+class FastSensorDescription(SensorEntityDescription):
     """A value from the latest records or the 24 h window.
 
     ``value_fn`` gets the fast data and the current time; ``attrs_fn`` gives
@@ -321,10 +322,10 @@ _COB_VALUE, _COB_ATTRS = _on_board(carbs_on_board)
 
 def _insulin_24h(
     key: str, value_fn: Callable[[FastData, datetime], Any]
-) -> PumpSensorDescription:
+) -> FastSensorDescription:
     # A rolling 24 h total rises and falls, so it is a measurement; a total
     # state class would make long-term statistics count it as consumption.
-    return PumpSensorDescription(
+    return FastSensorDescription(
         key=key,
         translation_key=key,
         native_unit_of_measurement=INSULIN_UNITS,
@@ -335,7 +336,7 @@ def _insulin_24h(
 
 
 PUMP_SENSORS = (
-    PumpSensorDescription(
+    FastSensorDescription(
         key="basal_rate",
         translation_key="basal_rate",
         native_unit_of_measurement=BASAL_RATE_UNITS,
@@ -344,7 +345,7 @@ PUMP_SENSORS = (
         value_fn=_basal_rate,
         attrs_fn=_basal_rate_attrs,
     ),
-    PumpSensorDescription(
+    FastSensorDescription(
         key="basal_mode",
         translation_key="basal_mode",
         device_class=SensorDeviceClass.ENUM,
@@ -353,7 +354,7 @@ PUMP_SENSORS = (
         attrs_fn=lambda data: basal_period(data.latest),
     ),
     # Single events carry no state class: their statistics would mean nothing.
-    PumpSensorDescription(
+    FastSensorDescription(
         key="last_bolus",
         translation_key="last_bolus",
         native_unit_of_measurement=INSULIN_UNITS,
@@ -364,7 +365,7 @@ PUMP_SENSORS = (
     _insulin_24h("insulin_basal_24h", _basal_24h),
     _insulin_24h("insulin_bolus_24h", _bolus_24h),
     _insulin_24h("insulin_total_24h", _total_24h),
-    PumpSensorDescription(
+    FastSensorDescription(
         key="carbs_last",
         translation_key="carbs_last",
         native_unit_of_measurement=UnitOfMass.GRAMS,
@@ -372,7 +373,7 @@ PUMP_SENSORS = (
         value_fn=_carbs_last,
         attrs_fn=_carbs_last_attrs,
     ),
-    PumpSensorDescription(
+    FastSensorDescription(
         key="carbs_24h",
         translation_key="carbs_24h",
         native_unit_of_measurement=UnitOfMass.GRAMS,
@@ -380,21 +381,21 @@ PUMP_SENSORS = (
         suggested_display_precision=0,
         value_fn=_carbs_24h,
     ),
-    PumpSensorDescription(
+    FastSensorDescription(
         key="last_injection",
         translation_key="last_injection",
         device_class=SensorDeviceClass.TIMESTAMP,
         value_fn=_newest_time("insulin"),
         attrs_fn=_injection_attrs,
     ),
-    PumpSensorDescription(
+    FastSensorDescription(
         key="last_activity",
         translation_key="last_activity",
         device_class=SensorDeviceClass.TIMESTAMP,
         value_fn=_newest_time("physicalActivity"),
     ),
     # Recorded by the pump or app at its last dosing decision; never live.
-    PumpSensorDescription(
+    FastSensorDescription(
         key="iob_at_last_decision",
         translation_key="iob_at_last_decision",
         native_unit_of_measurement=INSULIN_UNITS,
@@ -402,7 +403,7 @@ PUMP_SENSORS = (
         value_fn=_IOB_VALUE,
         attrs_fn=_IOB_ATTRS,
     ),
-    PumpSensorDescription(
+    FastSensorDescription(
         key="cob_at_last_decision",
         translation_key="cob_at_last_decision",
         native_unit_of_measurement=UnitOfMass.GRAMS,
@@ -410,6 +411,43 @@ PUMP_SENSORS = (
         value_fn=_COB_VALUE,
         attrs_fn=_COB_ATTRS,
     ),
+)
+
+# The record types with a "last data" time, by key suffix. Only the main ones
+# start enabled; the rest are there for a user who wants to watch them.
+LAST_DATA_TYPES = {
+    "cbg": "cbg",
+    "basal": "basal",
+    "bolus": "bolus",
+    "smbg": "smbg",
+    "food": "food",
+    "insulin": "insulin",
+    "physical_activity": "physicalActivity",
+    "device_event": "deviceEvent",
+    "pump_settings": "pumpSettings",
+    "cgm_settings": "cgmSettings",
+    "wizard": "wizard",
+    "upload": "upload",
+}
+LAST_DATA_ENABLED = ("cbg", "basal", "bolus")
+
+LAST_DATA_SENSORS = tuple(
+    FastSensorDescription(
+        key=f"last_data_{suffix}",
+        translation_key=f"last_data_{suffix}",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=suffix in LAST_DATA_ENABLED,
+        value_fn=_newest_time(record_type),
+    )
+    for suffix, record_type in LAST_DATA_TYPES.items()
+)
+
+LAST_UPLOAD = SensorEntityDescription(
+    key="last_upload",
+    translation_key="last_upload",
+    device_class=SensorDeviceClass.TIMESTAMP,
+    entity_category=EntityCategory.DIAGNOSTIC,
 )
 
 
@@ -426,13 +464,17 @@ async def async_setup_entry(
         entities.append(GlucoseSensor(coordinator, GLUCOSE, name))
         entities.append(GlucoseAgeSensor(coordinator, GLUCOSE_AGE, name))
         entities.extend(PumpSensor(coordinator, d, name) for d in PUMP_SENSORS)
+        entities.extend(FastSensor(coordinator, d, name) for d in LAST_DATA_SENSORS)
         slow = runtime.slow[user_id]
         entities.extend(SummarySensor(slow, d, name) for d in SUMMARY_SENSORS)
+        entities.append(LastUploadSensor(slow, LAST_UPLOAD, name))
     async_add_entities(entities)
 
 
 class GlucoseSensor(TidepoolEntity[TidepoolFastCoordinator], SensorEntity):
     """The newest continuous glucose reading, in the Home Assistant unit system."""
+
+    _device_role = DeviceRole.CGM
 
     @property
     def _us_units(self) -> bool:
@@ -463,6 +505,8 @@ class GlucoseSensor(TidepoolEntity[TidepoolFastCoordinator], SensorEntity):
 
 class GlucoseAgeSensor(TidepoolEntity[TidepoolFastCoordinator], SensorEntity):
     """Whole minutes since the newest glucose reading."""
+
+    _device_role = DeviceRole.CGM
 
     @override
     async def async_added_to_hass(self) -> None:
@@ -517,10 +561,10 @@ class SummarySensor(TidepoolEntity[TidepoolSlowCoordinator], SensorEntity):
         return value
 
 
-class PumpSensor(TidepoolEntity[TidepoolFastCoordinator], SensorEntity):
-    """A pump, insulin or carbs value of the latest records or the 24 h window."""
+class FastSensor(TidepoolEntity[TidepoolFastCoordinator], SensorEntity):
+    """A value of the latest records or the 24 h window."""
 
-    entity_description: PumpSensorDescription
+    entity_description: FastSensorDescription
 
     @property
     @override
@@ -531,3 +575,19 @@ class PumpSensor(TidepoolEntity[TidepoolFastCoordinator], SensorEntity):
     @override
     def extra_state_attributes(self) -> dict[str, Any] | None:
         return self.entity_description.attrs_fn(self.coordinator.data)
+
+
+class PumpSensor(FastSensor):
+    """A pump, insulin or carbs value; on the pump device once there is one."""
+
+    _device_role = DeviceRole.PUMP
+
+
+class LastUploadSensor(TidepoolEntity[TidepoolSlowCoordinator], SensorEntity):
+    """When the newest data set (upload) of the patient was made."""
+
+    @property
+    @override
+    def native_value(self) -> datetime | None:
+        times = (upload_time(s) for s in self.coordinator.data.data_sets)
+        return max((t for t in times if t is not None), default=None)
