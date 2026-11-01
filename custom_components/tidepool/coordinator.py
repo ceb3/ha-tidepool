@@ -78,8 +78,12 @@ class TidepoolFastCoordinator(DataUpdateCoordinator[FastData]):
         if runtime.auth_failed:
             raise ConfigEntryAuthFailed("Tidepool credentials were rejected")
         try:
-            payload = await self.client.latest(self.user_id)
+            payload = await self._async_latest_with_one_retry()
         except AuthError as err:
+            if err.status == 403 and self.user_id != self.client.user_id:
+                # Access to one shared patient was withdrawn; the login itself
+                # still works, so the other patients carry on.
+                raise UpdateFailed("access to this patient was refused") from err
             runtime.auth_failed = True
             raise ConfigEntryAuthFailed(str(err)) from err
         except RateLimitedError as err:
@@ -89,6 +93,20 @@ class TidepoolFastCoordinator(DataUpdateCoordinator[FastData]):
         except TidepoolError as err:
             raise UpdateFailed(str(err)) from err
         return FastData(latest=parse_latest(payload))
+
+    async def _async_latest_with_one_retry(self) -> list[dict]:
+        """Fetch the latest records, retrying once after a refused request.
+
+        A refused request has already invalidated the session, so the retry
+        signs in again silently (an expired session token). A rejected login
+        is not retried: it would only repeat the wrong credentials.
+        """
+        try:
+            return await self.client.latest(self.user_id)
+        except AuthError as err:
+            if err.from_login:
+                raise
+        return await self.client.latest(self.user_id)
 
     def _retry_after_seconds(self, retry_after: float | None) -> float | None:
         """Delay the next refresh until ``Retry-After``, never below the interval.

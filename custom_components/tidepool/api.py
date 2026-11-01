@@ -23,7 +23,19 @@ class TidepoolError(Exception):
 
 
 class AuthError(TidepoolError):
-    """The API rejected the credentials (HTTP 401 or 403)."""
+    """The API rejected the credentials (HTTP 401 or 403).
+
+    ``status`` is the HTTP status that caused it, when there was one.
+    ``from_login`` is True when the login or token refresh itself was rejected
+    (wrong or revoked credentials), not a request made with a session.
+    """
+
+    def __init__(
+        self, message: str, *, status: int | None = None, from_login: bool = False
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.from_login = from_login
 
 
 class RateLimitedError(TidepoolError):
@@ -82,6 +94,11 @@ class TidepoolClient:
         self._session = session
         self._auth = auth
         self._base_url = base_url.rstrip("/")
+
+    @property
+    def user_id(self) -> str | None:
+        """Return the id of the signed-in account, once known."""
+        return self._auth.user_id
 
     async def latest(self, user_id: str) -> list[dict]:
         """Return the latest record of each type for a user."""
@@ -160,7 +177,9 @@ class TidepoolClient:
                 status = response.status
                 if status in (401, 403):
                     await self._auth.async_invalidate()
-                    raise AuthError(f"GET {pattern} rejected credentials ({status})")
+                    raise AuthError(
+                        f"GET {pattern} rejected credentials ({status})", status=status
+                    )
                 if status == 429:
                     raise RateLimitedError(
                         f"GET {pattern} rate limited ({status})",

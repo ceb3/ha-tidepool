@@ -100,7 +100,11 @@ class LegacyAuth:
             ) as response:
                 status = response.status
                 if status == 401:
-                    raise AuthError("legacy login rejected credentials (401)")
+                    raise AuthError(
+                        "legacy login rejected credentials (401)",
+                        status=401,
+                        from_login=True,
+                    )
                 if status in (404, 410):
                     raise LegacyLoginWithdrawnError(
                         f"legacy login endpoint withdrawn ({status})"
@@ -227,7 +231,9 @@ class OAuthAuth:
         try:
             await self._session.async_ensure_token_valid()
         except OAuth2TokenRequestReauthError:
-            raise AuthError("OAuth token refresh was rejected") from None
+            raise AuthError(
+                "OAuth token refresh was rejected", from_login=True
+            ) from None
         except OAuth2TokenRequestBaseError as err:
             raise TidepoolError(
                 f"OAuth token refresh failed ({type(err).__name__})"

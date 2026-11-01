@@ -122,6 +122,18 @@ async def test_wrong_password_raises_auth_error(
     assert auth.user_id is None
 
 
+async def test_login_401_auth_error_is_from_login(
+    aioclient_mock: AiohttpClientMocker, auth: LegacyAuth
+) -> None:
+    aioclient_mock.post(LOGIN_URL, status=401)
+
+    with pytest.raises(AuthError) as excinfo:
+        await auth.async_headers()
+
+    assert excinfo.value.from_login is True
+    assert excinfo.value.status == 401
+
+
 @pytest.mark.parametrize("status", [404, 410])
 async def test_withdrawn_endpoint_raises_withdrawn(
     aioclient_mock: AiohttpClientMocker, auth: LegacyAuth, status: int

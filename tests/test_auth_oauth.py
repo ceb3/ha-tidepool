@@ -232,6 +232,7 @@ async def test_invalid_grant_raises_auth_error(
         await auth.async_headers()
 
     assert entry.data["token"]["refresh_token"] == revoked
+    assert err.value.from_login is True
     message = str(err.value)
     assert revoked not in message
     assert "http" not in message

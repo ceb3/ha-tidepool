@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -13,10 +14,14 @@ from homeassistant.components.application_credentials import (
 )
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.setup import async_setup_component
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.test_util.aiohttp import (
     AiohttpClientMocker,
+    AiohttpClientMockResponse,
 )
+from yarl import URL
 
 from custom_components.tidepool.api import TidepoolClient
 from custom_components.tidepool.auth import LegacyAuth, OAuthAuth
@@ -33,7 +38,9 @@ from .entries import (
     SESSION_TOKEN,
     USER_ID,
     latest_gets,
+    latest_url,
     legacy_entry,
+    load_fixture,
     login_posts,
     mock_latest,
     mock_login,
@@ -181,7 +188,7 @@ async def test_auth_error_triggers_reauth(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.DEBUG)
-    entry = legacy_entry(hass)
+    entry = legacy_entry(hass, patients=[USER_ID, PATIENT_ID])
     mock_login(aioclient_mock, status=401)
 
     assert not await hass.config_entries.async_setup(entry.entry_id)
@@ -190,7 +197,10 @@ async def test_auth_error_triggers_reauth(
     assert entry.state is ConfigEntryState.SETUP_ERROR
     [flow] = _reauth_flows(hass)
     assert flow["context"]["entry_id"] == entry.entry_id
+    # A wrong password at setup: one login attempt for both patients.
+    assert login_posts(aioclient_mock) == 1
     assert latest_gets(aioclient_mock, USER_ID) == 0
+    assert latest_gets(aioclient_mock, PATIENT_ID) == 0
     _assert_no_secrets(caplog)
 
 
@@ -206,7 +216,8 @@ async def test_wrong_password_one_login_attempt_for_two_patients(
     The first coordinator's request is rejected; the second coordinator must
     not try to log in again with the wrong password. (During setup the
     refreshes run one after the other and setup stops at the first auth
-    failure, so only a running entry can show the shared flag at work.)
+    failure, so only a running entry can show the shared flag at work; the
+    setup case is covered by ``test_auth_error_triggers_reauth``.)
     """
     caplog.set_level(logging.DEBUG)
     entry = legacy_entry(hass, patients=[USER_ID, PATIENT_ID])
@@ -228,7 +239,10 @@ async def test_wrong_password_one_login_attempt_for_two_patients(
     await second.async_refresh()
     await hass.async_block_till_done()
 
-    assert setup_logins + login_posts(aioclient_mock) == 1
+    # The refused GET earns one silent re-login, which the changed password
+    # rejects; that is the only attempt with the wrong password.
+    assert setup_logins + login_posts(aioclient_mock) == 2
+    assert login_posts(aioclient_mock) == 1
     assert entry.runtime_data.auth_failed is True
     assert latest_gets(aioclient_mock, USER_ID) == 1
     assert latest_gets(aioclient_mock, PATIENT_ID) == 0
@@ -264,3 +278,111 @@ async def test_account_with_no_data_loads(
         if record.levelno >= logging.WARNING
         and record.name.startswith("custom_components.tidepool")
     ]
+
+
+async def _load_two_patients(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> MockConfigEntry:
+    entry = legacy_entry(hass, patients=[USER_ID, PATIENT_ID])
+    mock_login(aioclient_mock)
+    mock_latest(aioclient_mock, USER_ID)
+    mock_latest(aioclient_mock, PATIENT_ID)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert login_posts(aioclient_mock) == 1
+    aioclient_mock.clear_requests()
+    return entry
+
+
+def _mock_latest_sequence(
+    aioclient_mock: AiohttpClientMocker, user_id: str, statuses: list[int]
+) -> None:
+    """Answer the latest GETs for ``user_id`` with ``statuses`` in turn."""
+    remaining = list(statuses)
+
+    async def respond(method: str, url: URL, data: Any) -> AiohttpClientMockResponse:
+        status = remaining.pop(0)
+        if status == 200:
+            return AiohttpClientMockResponse(
+                method, url, json=load_fixture("latest.json")
+            )
+        return AiohttpClientMockResponse(method, url, status=status)
+
+    aioclient_mock.get(latest_url(user_id), side_effect=respond)
+
+
+async def test_expired_session_relogs_in_silently(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    entry = legacy_entry(hass)
+    mock_login(aioclient_mock)
+    mock_latest(aioclient_mock)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    setup_logins = login_posts(aioclient_mock)
+    assert setup_logins == 1
+
+    # The session token expired; the password is still right.
+    aioclient_mock.clear_requests()
+    mock_login(aioclient_mock)
+    _mock_latest_sequence(aioclient_mock, USER_ID, [401, 200])
+    coordinator = entry.runtime_data.fast[USER_ID]
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert coordinator.last_update_success
+    assert coordinator.data.latest.cbg is not None
+    assert entry.runtime_data.auth_failed is False
+    assert _reauth_flows(hass) == []
+    assert setup_logins + login_posts(aioclient_mock) == 2
+    assert latest_gets(aioclient_mock, USER_ID) == 2
+
+
+async def test_get_401_twice_triggers_reauth(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    entry = legacy_entry(hass)
+    mock_login(aioclient_mock)
+    mock_latest(aioclient_mock)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Login works, but the API keeps refusing the fresh session.
+    aioclient_mock.clear_requests()
+    mock_login(aioclient_mock)
+    mock_latest(aioclient_mock, status=401)
+    coordinator = entry.runtime_data.fast[USER_ID]
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert not coordinator.last_update_success
+    assert entry.runtime_data.auth_failed is True
+    assert len(_reauth_flows(hass)) == 1
+    assert login_posts(aioclient_mock) == 1  # one silent re-login, no loop
+    assert latest_gets(aioclient_mock, USER_ID) == 2
+
+
+async def test_data_403_on_other_patient_does_not_reauth_entry(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    entry = await _load_two_patients(hass, aioclient_mock)
+    own, other = entry.runtime_data.fast.values()
+    own_data = own.data
+
+    # The other patient's share was revoked.
+    mock_login(aioclient_mock)
+    mock_latest(aioclient_mock, USER_ID)
+    mock_latest(aioclient_mock, PATIENT_ID, status=403)
+    await other.async_refresh()
+    await own.async_refresh()
+    await hass.async_block_till_done()
+
+    assert not other.last_update_success
+    assert isinstance(other.last_exception, UpdateFailed)
+    assert latest_gets(aioclient_mock, PATIENT_ID) == 2
+    assert own.last_update_success
+    assert own.data.latest.cbg == own_data.latest.cbg
+    assert entry.runtime_data.auth_failed is False
+    assert _reauth_flows(hass) == []
+    assert entry.state is ConfigEntryState.LOADED

@@ -89,6 +89,26 @@ async def test_401_invalidates_auth_and_raises_auth_error(
     assert aioclient_mock.call_count == 1
 
 
+@pytest.mark.parametrize("status", [401, 403])
+async def test_auth_error_carries_status_not_from_login(
+    aioclient_mock: AiohttpClientMocker, client: TidepoolClient, status: int
+) -> None:
+    aioclient_mock.get(f"{API_URL}/data/{USER_ID}", status=status)
+
+    with pytest.raises(AuthError) as excinfo:
+        await client.latest(USER_ID)
+
+    assert excinfo.value.status == status
+    assert excinfo.value.from_login is False
+
+
+def test_auth_error_defaults() -> None:
+    err = AuthError("rejected")
+
+    assert err.status is None
+    assert err.from_login is False
+
+
 async def test_429_raises_rate_limited_with_retry_after(
     aioclient_mock: AiohttpClientMocker, client: TidepoolClient
 ) -> None:
