@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, override
 
@@ -11,16 +13,20 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import EntityCategory, UnitOfTime
+from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTime
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
 
-from .coordinator import TidepoolConfigEntry
+from .coordinator import (
+    TidepoolConfigEntry,
+    TidepoolFastCoordinator,
+    TidepoolSlowCoordinator,
+)
 from .entity import TidepoolEntity
-from .models import mmol_to_mgdl
+from .models import SUMMARY_PERIODS, Summary, mmol_to_mgdl
 
 # Tidepool reports glucose in mmol/L whatever the account's display setting.
 SOURCE_UNITS = "mmol/L"
@@ -44,6 +50,101 @@ GLUCOSE_AGE = SensorEntityDescription(
 )
 
 
+@dataclass(frozen=True, kw_only=True)
+class SummarySensorDescription(SensorEntityDescription):
+    """A summary statistic of one period."""
+
+    kind: str
+    period: str
+    value_fn: Callable[[Summary], float | None]
+    # Glucose statistics follow the Home Assistant unit system; value_fn then
+    # returns mmol/L.
+    glucose: bool = False
+
+
+@dataclass(frozen=True)
+class _Metric:
+    """A statistic of a summary, offered for every period."""
+
+    name: str
+    value_fn: Callable[[Summary], float | None]
+    unit: str | None = None
+    glucose: bool = False
+    device_class: SensorDeviceClass | None = None
+    category: EntityCategory | None = None
+    precision: int = 1
+    # Periods whose sensor is enabled when the entry is set up; the rest start
+    # disabled and a user switches on the ones they want.
+    enabled_periods: tuple[str, ...] = ()
+
+
+# Shown in entity names, e.g. "Time in range (24 h)".
+PERIOD_LABELS = {"1d": "24 h", "7d": "7 d", "14d": "14 d", "30d": "30 d"}
+
+SUMMARY_METRICS = (
+    _Metric(
+        "time_in_range",
+        lambda s: s.time_in_range,
+        PERCENTAGE,
+        enabled_periods=("1d", "14d"),
+    ),
+    _Metric("low", lambda s: s.low, PERCENTAGE, enabled_periods=("1d",)),
+    _Metric("very_low", lambda s: s.very_low, PERCENTAGE),
+    _Metric("high", lambda s: s.high, PERCENTAGE, enabled_periods=("1d",)),
+    _Metric("very_high", lambda s: s.very_high, PERCENTAGE),
+    _Metric("extreme_high", lambda s: s.extreme_high, PERCENTAGE),
+    _Metric(
+        "average",
+        lambda s: s.average_mmol,
+        glucose=True,
+        device_class=SensorDeviceClass.BLOOD_GLUCOSE_CONCENTRATION,
+        enabled_periods=("14d",),
+    ),
+    _Metric("gmi", lambda s: s.gmi, PERCENTAGE, enabled_periods=("14d",)),
+    _Metric("cv", lambda s: s.cv, PERCENTAGE, enabled_periods=("14d",)),
+    _Metric("sd", lambda s: s.sd_mmol, glucose=True),
+    _Metric("min", lambda s: s.min_mmol, glucose=True),
+    _Metric("max", lambda s: s.max_mmol, glucose=True),
+    _Metric(
+        "hours_with_data",
+        lambda s: s.hours_with_data,
+        UnitOfTime.HOURS,
+        device_class=SensorDeviceClass.DURATION,
+        category=EntityCategory.DIAGNOSTIC,
+        precision=0,
+    ),
+    _Metric(
+        "days_with_data",
+        lambda s: s.days_with_data,
+        UnitOfTime.DAYS,
+        device_class=SensorDeviceClass.DURATION,
+        category=EntityCategory.DIAGNOSTIC,
+        precision=0,
+    ),
+)
+
+# The unique id of each sensor ends in its key: summary_<kind>_<period>_<metric>.
+SUMMARY_SENSORS = tuple(
+    SummarySensorDescription(
+        key=f"summary_cgm_{period}_{metric.name}",
+        translation_key=f"summary_{metric.name}",
+        translation_placeholders={"period": PERIOD_LABELS[period]},
+        kind="cgm",
+        period=period,
+        value_fn=metric.value_fn,
+        glucose=metric.glucose,
+        device_class=metric.device_class,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=metric.unit,
+        entity_category=metric.category,
+        suggested_display_precision=metric.precision,
+        entity_registry_enabled_default=period in metric.enabled_periods,
+    )
+    for period in SUMMARY_PERIODS
+    for metric in SUMMARY_METRICS
+)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: TidepoolConfigEntry,
@@ -56,10 +157,12 @@ async def async_setup_entry(
         coordinator = runtime.fast[user_id]
         entities.append(GlucoseSensor(coordinator, GLUCOSE, name))
         entities.append(GlucoseAgeSensor(coordinator, GLUCOSE_AGE, name))
+        slow = runtime.slow[user_id]
+        entities.extend(SummarySensor(slow, d, name) for d in SUMMARY_SENSORS)
     async_add_entities(entities)
 
 
-class GlucoseSensor(TidepoolEntity, SensorEntity):
+class GlucoseSensor(TidepoolEntity[TidepoolFastCoordinator], SensorEntity):
     """The newest continuous glucose reading, in the Home Assistant unit system."""
 
     @property
@@ -89,7 +192,7 @@ class GlucoseSensor(TidepoolEntity, SensorEntity):
         return {"reading_time": cbg.time.isoformat(), "source_units": SOURCE_UNITS}
 
 
-class GlucoseAgeSensor(TidepoolEntity, SensorEntity):
+class GlucoseAgeSensor(TidepoolEntity[TidepoolFastCoordinator], SensorEntity):
     """Whole minutes since the newest glucose reading."""
 
     @override
@@ -114,3 +217,32 @@ class GlucoseAgeSensor(TidepoolEntity, SensorEntity):
             return None
         age = dt_util.utcnow() - cbg.time
         return max(0, int(age.total_seconds() // 60))
+
+
+class SummarySensor(TidepoolEntity[TidepoolSlowCoordinator], SensorEntity):
+    """One statistic of one period of the continuous glucose summary."""
+
+    entity_description: SummarySensorDescription
+
+    @property
+    def _us_units(self) -> bool:
+        return self.hass.config.units is US_CUSTOMARY_SYSTEM
+
+    @property
+    @override
+    def native_unit_of_measurement(self) -> str | None:
+        if not self.entity_description.glucose:
+            return self.entity_description.native_unit_of_measurement
+        return "mg/dL" if self._us_units else SOURCE_UNITS
+
+    @property
+    @override
+    def native_value(self) -> float | None:
+        description = self.entity_description
+        summary = self.coordinator.data.summary(description.kind, description.period)
+        if summary is None:
+            return None
+        value = description.value_fn(summary)
+        if value is not None and description.glucose and self._us_units:
+            return mmol_to_mgdl(value)
+        return value

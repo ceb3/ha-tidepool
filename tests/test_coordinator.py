@@ -28,6 +28,7 @@ from .entries import (
     mock_latest,
     mock_login,
     mock_profile,
+    mock_slow,
 )
 
 
@@ -38,6 +39,7 @@ async def _loaded_coordinator(
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock)
     mock_profile(aioclient_mock)
+    mock_slow(aioclient_mock)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.LOADED

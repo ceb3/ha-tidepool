@@ -38,6 +38,7 @@ from .entries import (
     mock_latest,
     mock_login,
     mock_profile,
+    mock_slow,
 )
 
 READING = {"type": "cbg", "id": "rec-1", "time": "2026-11-01T12:00:00Z", "value": 5.5}
@@ -58,6 +59,7 @@ async def _setup(
     for patient in patients or [USER_ID]:
         mock_latest(aioclient_mock, user_id=patient, payload=payload)
         mock_profile(aioclient_mock, user_id=patient, full_name=full_name)
+        mock_slow(aioclient_mock, patient)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.LOADED
@@ -194,7 +196,9 @@ async def _setup_with_profiles(
     mock_latest(aioclient_mock, USER_ID)
     mock_latest(aioclient_mock, PATIENT_ID)
     mock_profile(aioclient_mock, USER_ID)
+    mock_slow(aioclient_mock, USER_ID)
     mock_profile(aioclient_mock, PATIENT_ID, **second_profile)
+    mock_slow(aioclient_mock, PATIENT_ID)
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     return entry
@@ -202,8 +206,11 @@ async def _setup_with_profiles(
 
 def _tidepool_entities(hass: HomeAssistant, entry: MockConfigEntry) -> list[str]:
     registry = er.async_get(hass)
+    # The glucose sensors; the summary sensors are covered by test_summary.py.
     return [
-        e.unique_id for e in er.async_entries_for_config_entry(registry, entry.entry_id)
+        e.unique_id
+        for e in er.async_entries_for_config_entry(registry, entry.entry_id)
+        if "_summary_" not in e.unique_id
     ]
 
 
@@ -229,6 +236,7 @@ async def test_profile_failure_retries_setup_without_registering(
     for patient in (USER_ID, PATIENT_ID):
         mock_latest(aioclient_mock, patient)
         mock_profile(aioclient_mock, patient, full_name=f"Fake {patient[-4:]}")
+        mock_slow(aioclient_mock, patient)
     async_fire_time_changed(hass, datetime.now(UTC) + timedelta(seconds=10))
     await hass.async_block_till_done(wait_background_tasks=True)
 

@@ -7,17 +7,17 @@ from homeassistant.helpers.entity import EntityDescription
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import TidepoolFastCoordinator
+from .coordinator import TidepoolCoordinator
 
 
-class TidepoolEntity(CoordinatorEntity[TidepoolFastCoordinator]):
-    """An entity of one patient, fed by that patient's fast coordinator."""
+class TidepoolEntity[C: TidepoolCoordinator](CoordinatorEntity[C]):
+    """An entity of one patient, fed by one of that patient's coordinators."""
 
     _attr_has_entity_name = True
 
     def __init__(
         self,
-        coordinator: TidepoolFastCoordinator,
+        coordinator: C,
         description: EntityDescription,
         device_name: str,
     ) -> None:

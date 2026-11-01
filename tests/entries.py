@@ -86,6 +86,49 @@ def mock_profile(
         aioclient_mock.get(url, json={"fullName": full_name})
 
 
+def mock_slow(
+    aioclient_mock: AiohttpClientMocker,
+    user_id: str = USER_ID,
+    cgm: dict | None = None,
+    bgm_status: int = 404,
+    data_sources_status: int = 200,
+    data_sets_status: int = 200,
+) -> None:
+    """Mock a user's slow endpoints: a synthetic cgm summary, no bgm summary.
+
+    A ``None`` ``cgm`` means the fixture; an empty dict is an empty summary.
+    Profile is mocked by ``mock_profile``.
+    """
+    base = f"{API_URL}/v1/summaries"
+    aioclient_mock.get(
+        f"{base}/cgm/{user_id}",
+        json=load_fixture("summary_cgm.json") if cgm is None else cgm,
+    )
+    if bgm_status == 200:
+        aioclient_mock.get(f"{base}/bgm/{user_id}", json={"periods": {}})
+    else:
+        aioclient_mock.get(f"{base}/bgm/{user_id}", status=bgm_status)
+    for name, status in (
+        ("data_sources", data_sources_status),
+        ("data_sets", data_sets_status),
+    ):
+        url = f"{API_URL}/v1/users/{user_id}/{name}"
+        if status == 200:
+            aioclient_mock.get(url, json=[])
+        else:
+            aioclient_mock.get(url, status=status)
+
+
+def summary_gets(
+    aioclient_mock: AiohttpClientMocker, user_id: str, kind: str = "cgm"
+) -> int:
+    return sum(
+        1
+        for method, url, _, _ in aioclient_mock.mock_calls
+        if method.lower() == "get" and url.path == f"/v1/summaries/{kind}/{user_id}"
+    )
+
+
 def login_posts(aioclient_mock: AiohttpClientMocker) -> int:
     return sum(
         1

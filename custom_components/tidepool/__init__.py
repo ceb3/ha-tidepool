@@ -26,7 +26,12 @@ from .const import (
     CONF_PATIENTS,
     DEFAULT_DEVICE_NAME,
 )
-from .coordinator import TidepoolConfigEntry, TidepoolFastCoordinator, TidepoolRuntime
+from .coordinator import (
+    TidepoolConfigEntry,
+    TidepoolFastCoordinator,
+    TidepoolRuntime,
+    TidepoolSlowCoordinator,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,7 +43,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: TidepoolConfigEntry) -> 
     client = TidepoolClient(
         async_get_clientsession(hass), await _async_auth_strategy(hass, entry)
     )
-    runtime = TidepoolRuntime(client=client, fast={})
+    runtime = TidepoolRuntime(client=client, fast={}, slow={})
     # Coordinators read the shared auth flag from the runtime while refreshing.
     entry.runtime_data = runtime
 
@@ -48,8 +53,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: TidepoolConfigEntry) -> 
         runtime.fast[user_id] = coordinator
         await coordinator.async_config_entry_first_refresh()
 
+    # A patient without a name has no entities, so needs no slow data either.
     for user_id in patients:
         await _async_name_patient(runtime, user_id)
+        if user_id in runtime.names:
+            slow = TidepoolSlowCoordinator(hass, entry, client, user_id)
+            runtime.slow[user_id] = slow
+            await slow.async_config_entry_first_refresh()
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

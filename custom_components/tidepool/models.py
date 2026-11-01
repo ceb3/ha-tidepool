@@ -100,3 +100,100 @@ def parse_latest(payload: list[dict]) -> Latest:
         if current is None or time > current[0]:
             newest[record_type] = (time, record)
     return Latest(by_type={t: rec for t, (_, rec) in newest.items()})
+
+
+# The periods Tidepool computes summaries for.
+SUMMARY_PERIODS = ("1d", "7d", "14d", "30d")
+
+# Tidepool sends ``percent`` and ``coefficientOfVariation`` as 0-1 fractions
+# (the API spec's example for ``percent`` is 0.33); the model holds percentages.
+_PERCENT = 100
+
+
+def _number(value: Any) -> float | None:
+    return float(value) if _is_number(value) else None
+
+
+def _count(value: Any) -> int | None:
+    return int(value) if _is_number(value) else None
+
+
+def _percent(value: Any) -> float | None:
+    number = _number(value)
+    return None if number is None else round(number * _PERCENT, 1)
+
+
+@dataclass(frozen=True)
+class Summary:
+    """One period of a Tidepool summary; a missing or malformed field is None.
+
+    Time in each range and ``cv`` are percentages (0-100), ``gmi`` is a
+    percentage as Tidepool sends it, glucose values stay in mmol/L as
+    delivered. ``delta`` is the change against the previous period of the
+    same length, in the same units.
+    """
+
+    time_in_range: float | None
+    low: float | None
+    very_low: float | None
+    high: float | None
+    very_high: float | None
+    extreme_high: float | None
+    average_mmol: float | None
+    gmi: float | None
+    cv: float | None
+    sd_mmol: float | None
+    min_mmol: float | None
+    max_mmol: float | None
+    hours_with_data: int | None
+    days_with_data: int | None
+    delta: Summary | None = None
+
+    @property
+    def average_mgdl(self) -> float | None:
+        """The average glucose in mg/dL."""
+        if self.average_mmol is None:
+            return None
+        return mmol_to_mgdl(self.average_mmol)
+
+
+def _range_percent(period: dict, key: str) -> float | None:
+    stat = period.get(key)
+    return _percent(stat.get("percent")) if isinstance(stat, dict) else None
+
+
+def _parse_period(period: dict, *, with_delta: bool = True) -> Summary:
+    delta = period.get("delta")
+    return Summary(
+        time_in_range=_range_percent(period, "inTarget"),
+        low=_range_percent(period, "inLow"),
+        very_low=_range_percent(period, "inVeryLow"),
+        high=_range_percent(period, "inHigh"),
+        very_high=_range_percent(period, "inVeryHigh"),
+        extreme_high=_range_percent(period, "inExtremeHigh"),
+        average_mmol=_number(period.get("averageGlucoseMmol")),
+        gmi=_number(period.get("glucoseManagementIndicator")),
+        cv=_percent(period.get("coefficientOfVariation")),
+        sd_mmol=_number(period.get("standardDeviation")),
+        min_mmol=_number(period.get("min")),
+        max_mmol=_number(period.get("max")),
+        hours_with_data=_count(period.get("hoursWithData")),
+        days_with_data=_count(period.get("daysWithData")),
+        delta=(
+            _parse_period(delta, with_delta=False)
+            if with_delta and isinstance(delta, dict)
+            else None
+        ),
+    )
+
+
+def parse_summary(payload: Any) -> dict[str, Summary]:
+    """Parse the periods of a summary payload, keyed by period (``14d``)."""
+    periods = payload.get("periods") if isinstance(payload, dict) else None
+    if not isinstance(periods, dict):
+        return {}
+    return {
+        name: _parse_period(period)
+        for name, period in periods.items()
+        if isinstance(period, dict)
+    }

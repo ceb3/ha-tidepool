@@ -45,6 +45,7 @@ from .entries import (
     mock_latest,
     mock_login,
     mock_profile,
+    mock_slow,
     oauth_entry,
 )
 from .mock_keycloak import MockKeycloak
@@ -75,8 +76,10 @@ async def test_setup_and_unload_entry(
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock, USER_ID)
     mock_profile(aioclient_mock, USER_ID)
+    mock_slow(aioclient_mock, USER_ID)
     mock_latest(aioclient_mock, PATIENT_ID)
     mock_profile(aioclient_mock, PATIENT_ID)
+    mock_slow(aioclient_mock, PATIENT_ID)
 
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -113,6 +116,7 @@ async def test_options_override_patients_and_interval(
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock, PATIENT_ID)
     mock_profile(aioclient_mock, PATIENT_ID)
+    mock_slow(aioclient_mock, PATIENT_ID)
 
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -140,8 +144,10 @@ async def test_one_auth_strategy_per_entry_oauth(
     entry = oauth_entry(hass, patients=[USER_ID, PATIENT_ID])
     mock_latest(aioclient_mock, USER_ID)
     mock_profile(aioclient_mock, USER_ID)
+    mock_slow(aioclient_mock, USER_ID)
     mock_latest(aioclient_mock, PATIENT_ID)
     mock_profile(aioclient_mock, PATIENT_ID)
+    mock_slow(aioclient_mock, PATIENT_ID)
 
     with (
         patch(
@@ -180,6 +186,7 @@ async def test_legacy_entry_uses_legacy_auth(
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock)
     mock_profile(aioclient_mock)
+    mock_slow(aioclient_mock)
 
     with patch("custom_components.tidepool.OAuthAuth") as oauth_cls:
         assert await hass.config_entries.async_setup(entry.entry_id)
@@ -231,8 +238,10 @@ async def test_wrong_password_one_login_attempt_for_two_patients(
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock, USER_ID)
     mock_profile(aioclient_mock, USER_ID)
+    mock_slow(aioclient_mock, USER_ID)
     mock_latest(aioclient_mock, PATIENT_ID)
     mock_profile(aioclient_mock, PATIENT_ID)
+    mock_slow(aioclient_mock, PATIENT_ID)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     setup_logins = login_posts(aioclient_mock)
@@ -270,6 +279,7 @@ async def test_account_with_no_data_loads(
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock, payload=[])
     mock_profile(aioclient_mock)
+    mock_slow(aioclient_mock)
 
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -297,8 +307,10 @@ async def _load_two_patients(
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock, USER_ID)
     mock_profile(aioclient_mock, USER_ID)
+    mock_slow(aioclient_mock, USER_ID)
     mock_latest(aioclient_mock, PATIENT_ID)
     mock_profile(aioclient_mock, PATIENT_ID)
+    mock_slow(aioclient_mock, PATIENT_ID)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert login_posts(aioclient_mock) == 1
@@ -330,6 +342,7 @@ async def test_expired_session_relogs_in_silently(
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock)
     mock_profile(aioclient_mock)
+    mock_slow(aioclient_mock)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     setup_logins = login_posts(aioclient_mock)
@@ -359,6 +372,7 @@ async def test_get_401_twice_triggers_reauth(
     mock_login(aioclient_mock)
     mock_latest(aioclient_mock)
     mock_profile(aioclient_mock)
+    mock_slow(aioclient_mock)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 

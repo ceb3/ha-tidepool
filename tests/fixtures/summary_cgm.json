@@ -1,0 +1,195 @@
+{
+  "config": {
+    "schemaVersion": 5,
+    "lowGlucoseThreshold": 3.9,
+    "VeryLowGlucoseThreshold": 3,
+    "highGlucoseThreshold": 10,
+    "veryHighGlucoseThreshold": 13.9
+  },
+  "dates": {
+    "firstData": "2026-09-01T00:00:00Z",
+    "lastData": "2026-11-01T12:05:00Z",
+    "lastUpdatedDate": "2026-11-01T12:10:00Z",
+    "lastUploadDate": "2026-11-01T12:06:00Z"
+  },
+  "id": "fake-summary-0001",
+  "periods": {
+    "1d": {
+      "averageDailyRecords": 270.0,
+      "averageGlucoseMmol": 8.0,
+      "coefficientOfVariation": 0.31,
+      "daysWithData": 1,
+      "hoursWithData": 23,
+      "glucoseManagementIndicator": 7.1,
+      "standardDeviation": 2.5,
+      "min": 3.2,
+      "max": 15.8,
+      "minDelta": 0.0,
+      "maxDelta": 0.0,
+      "inTarget": {
+        "minutes": 856,
+        "percent": 0.62,
+        "records": 171
+      },
+      "inLow": {
+        "minutes": 69,
+        "percent": 0.05,
+        "records": 14
+      },
+      "inVeryLow": {
+        "minutes": 28,
+        "percent": 0.02,
+        "records": 6
+      },
+      "inHigh": {
+        "minutes": 345,
+        "percent": 0.25,
+        "records": 69
+      },
+      "inVeryHigh": {
+        "minutes": 69,
+        "percent": 0.05,
+        "records": 14
+      },
+      "inExtremeHigh": {
+        "minutes": 14,
+        "percent": 0.01,
+        "records": 3
+      },
+      "inAnyLow": {
+        "minutes": 97,
+        "percent": 0.07,
+        "records": 19
+      },
+      "inAnyHigh": {
+        "minutes": 428,
+        "percent": 0.31,
+        "records": 86
+      },
+      "total": {
+        "minutes": 1380,
+        "percent": 0.9583,
+        "records": 276,
+        "glucose": 0.0,
+        "variance": 0.0
+      }
+    },
+    "14d": {
+      "averageDailyRecords": 275.5,
+      "averageGlucoseMmol": 7.2,
+      "coefficientOfVariation": 0.36,
+      "daysWithData": 14,
+      "hoursWithData": 320,
+      "glucoseManagementIndicator": 6.8,
+      "standardDeviation": 2.6,
+      "min": 2.8,
+      "max": 18.4,
+      "minDelta": 0.0,
+      "maxDelta": 0.0,
+      "inTarget": {
+        "minutes": 13632,
+        "percent": 0.71,
+        "records": 2726
+      },
+      "inLow": {
+        "minutes": 768,
+        "percent": 0.04,
+        "records": 154
+      },
+      "inVeryLow": {
+        "minutes": 192,
+        "percent": 0.01,
+        "records": 38
+      },
+      "inHigh": {
+        "minutes": 3840,
+        "percent": 0.2,
+        "records": 768
+      },
+      "inVeryHigh": {
+        "minutes": 768,
+        "percent": 0.04,
+        "records": 154
+      },
+      "inExtremeHigh": {
+        "minutes": 0,
+        "percent": 0.0,
+        "records": 0
+      },
+      "inAnyLow": {
+        "minutes": 960,
+        "percent": 0.05,
+        "records": 192
+      },
+      "inAnyHigh": {
+        "minutes": 4608,
+        "percent": 0.24,
+        "records": 922
+      },
+      "total": {
+        "minutes": 19200,
+        "percent": 0.9524,
+        "records": 3840,
+        "glucose": 0.0,
+        "variance": 0.0
+      },
+      "delta": {
+        "averageGlucoseMmol": 0.4,
+        "coefficientOfVariation": -0.02,
+        "glucoseManagementIndicator": 0.1,
+        "standardDeviation": 0.1,
+        "min": -0.2,
+        "max": 1.5,
+        "hoursWithData": -4,
+        "averageDailyRecords": -3.5,
+        "inTarget": {
+          "minutes": -300,
+          "percent": -0.03,
+          "records": -60
+        },
+        "inLow": {
+          "minutes": 30,
+          "percent": 0.01,
+          "records": 6
+        },
+        "inVeryLow": {
+          "minutes": 0,
+          "percent": 0.0,
+          "records": 0
+        },
+        "inHigh": {
+          "minutes": 200,
+          "percent": 0.02,
+          "records": 40
+        },
+        "inVeryHigh": {
+          "minutes": 70,
+          "percent": 0.0,
+          "records": 14
+        },
+        "inExtremeHigh": {
+          "minutes": 0,
+          "percent": 0.0,
+          "records": 0
+        },
+        "inAnyLow": {
+          "minutes": 30,
+          "percent": 0.01,
+          "records": 6
+        },
+        "inAnyHigh": {
+          "minutes": 270,
+          "percent": 0.02,
+          "records": 54
+        },
+        "total": {
+          "minutes": -240,
+          "percent": -0.01,
+          "records": -48
+        }
+      }
+    }
+  },
+  "type": "cgm",
+  "userId": "fake-user-0001"
+}

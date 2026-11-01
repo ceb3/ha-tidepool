@@ -1,5 +1,6 @@
 """Constants for the Tidepool integration."""
 
+from datetime import timedelta
 from typing import Final
 
 DOMAIN: Final = "tidepool"
@@ -30,6 +31,9 @@ AUTH_METHOD_LEGACY: Final = "legacy"
 DEFAULT_FAST_INTERVAL: Final = 5
 MIN_FAST_INTERVAL: Final = 2
 MAX_FAST_INTERVAL: Final = 30
+
+# Slow refresh interval (summaries, data sources and sets, profile).
+SLOW_INTERVAL: Final = timedelta(hours=1)
 
 # Shown on the email and password form through the ``disclaimer`` placeholder.
 LEGACY_DISCLAIMER: Final = (
