@@ -114,6 +114,29 @@ def upload_time(data_set: Any) -> datetime | None:
         return None
 
 
+def import_time(data_source: Any) -> datetime | None:
+    """When a data source last imported, or None if it has no usable time."""
+    if not isinstance(data_source, dict):
+        return None
+    raw = data_source.get("lastImportTime")
+    if not isinstance(raw, str):
+        return None
+    try:
+        return parse_time(raw)
+    except ValueError:
+        return None
+
+
+def last_upload(data_sets: list[dict], data_sources: list[dict]) -> datetime | None:
+    """The newest data set time or data source import time, if there is one.
+
+    Data that flows through a data source (a cloud account) leaves its data
+    sets old, so the imports count as well.
+    """
+    times = [*map(upload_time, data_sets), *map(import_time, data_sources)]
+    return max((t for t in times if t is not None), default=None)
+
+
 def _describe(role: DeviceRole, data_sets: list[dict]) -> ChildDevice:
     """Name a device from the newest of its data sets."""
     newest = max(data_sets, key=lambda s: upload_time(s) or _NO_TIME, default={})

@@ -106,7 +106,7 @@ Summaries come from Tidepool's own statistics for continuous glucose, which Tide
 | `summary_hours_with_data` | Hours with data (diagnostic) | h | none |
 | `summary_days_with_data` | Days with data (diagnostic) | d | none |
 
-Diagnostic timestamps (time of the newest record of a data type, or of the newest upload):
+Diagnostic timestamps (time of the newest record of a data type, or of the newest upload or data source import):
 
 | Key | Name | Type | Default |
 | --- | --- | --- | --- |
@@ -122,7 +122,7 @@ Diagnostic timestamps (time of the newest record of a data type, or of the newes
 | `last_data_cgm_settings` | Last CGM settings | timestamp | Off |
 | `last_data_wizard` | Last bolus calculator data | timestamp | Off |
 | `last_data_upload` | Last upload record | timestamp | Off |
-| `last_upload` | Last upload | timestamp | On |
+| `last_upload` | Last upload | timestamp; the newest of the newest data set and the last import of any data source, so cloud-connected sources count too | On |
 
 Data sources are the services Tidepool imports data from (for example a cloud account of a glucose monitor). One diagnostic connectivity sensor is created for each data source that Tidepool lists, named after its provider. It is on when Tidepool reports the source as connected, off when it is disconnected or in error, and unknown otherwise. Its attributes carry the state and the times of the last import and of the latest data.
 
@@ -188,7 +188,7 @@ Notes on the pump entities:
 - The basal rate, basal mode and the two delivery sensors are unknown once the newest basal segment ended more than two hours ago, instead of showing an old state as current. The attributes still say when the segment ran.
 - The "now" settings pick the entry of the pump's schedule that is in force at the pump's local time, and are refreshed every minute. The pump's local time comes from the time zone in its settings record. If the record only has a fixed UTC offset, Home Assistant's time zone is used when it had that same offset at the time of the record (so daylight saving time is followed); otherwise the offset is kept as it is. The `zone_basis` attribute of these sensors says which applies: `named_zone`, `home_zone` or `fixed_offset`.
 - The carb ratio, insulin sensitivity, target low and target high sensors carry the attributes `as_of` (when the settings were uploaded) and `note` ("Pump setting as last uploaded; not advice."). Nothing is calculated from any setting.
-- Insulin on board and carbs on board come from the newest dosing decision or bolus calculator record that has them. The attributes say when ("as of") and from which record. They are never extrapolated to the present.
+- Insulin on board and carbs on board come from the newest dosing decision or bolus calculator record that has them. The attributes say when ("as of") and from which record. They are never extrapolated to the present. IOB and COB read unknown when the last dosing decision is older than 6 hours; the attributes still show when that decision was.
 - The 24 hour totals are unknown until the pump has uploaded basal or bolus records in the last 24 hours.
 
 ### Update cadence

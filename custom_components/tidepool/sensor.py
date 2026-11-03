@@ -34,7 +34,7 @@ from .coordinator import (
     TidepoolFastCoordinator,
     TidepoolSlowCoordinator,
 )
-from .devices import DeviceRole, upload_time
+from .devices import DeviceRole, last_upload
 from .entity import TidepoolEntity
 from .models import (
     BASAL_DELIVERY_TYPES,
@@ -49,6 +49,7 @@ from .models import (
     carbs_on_board,
     convert_glucose,
     current_basal,
+    decision_is_current,
     delivered_bolus,
     dig,
     glucose_unit,
@@ -319,9 +320,12 @@ def _on_board(
         records = [*_latest(data, "dosingDecision"), *_latest(data, "wizard")]
         return newest_with(records, value_fn)
 
-    def value(data: FastData, _now: datetime) -> float | None:
+    def value(data: FastData, now: datetime) -> float | None:
+        # Unknown once the decision is stale; the attributes still say when.
         found = decision(data)
-        return None if found is None else found[0]
+        if found is None or not decision_is_current(found[1], now):
+            return None
+        return found[0]
 
     def attrs(data: FastData) -> dict[str, Any] | None:
         found = decision(data)
@@ -998,13 +1002,13 @@ class RecordSensor(_MinuteTick, TidepoolEntity[TidepoolFastCoordinator], SensorE
 
 
 class LastUploadSensor(TidepoolEntity[TidepoolSlowCoordinator], SensorEntity):
-    """When the newest data set (upload) of the patient was made."""
+    """When data last arrived: the newest data set or data source import."""
 
     @property
     @override
     def native_value(self) -> datetime | None:
-        times = (upload_time(s) for s in self.coordinator.data.data_sets)
-        return max((t for t in times if t is not None), default=None)
+        data = self.coordinator.data
+        return last_upload(data.data_sets, data.data_sources)
 
 
 class DeviceEventSensor(TidepoolEntity[TidepoolSlowCoordinator], SensorEntity):

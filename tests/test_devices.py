@@ -484,6 +484,115 @@ async def test_last_upload_timestamp(
     assert state.state == (NOW - timedelta(minutes=20)).isoformat()
 
 
+def _import_source(last_import: object) -> dict[str, Any]:
+    source = _source(SOURCE_ON, "fakeprovider", "connected")
+    source["lastImportTime"] = last_import
+    return source
+
+
+async def _last_upload_state(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+    data_sets: list[dict] | None,
+    data_sources: list[dict] | None,
+) -> str:
+    await _setup(
+        hass, aioclient_mock, freezer, data_sets=data_sets, data_sources=data_sources
+    )
+    state = hass.states.get(_entity(hass, "sensor", "last_upload").entity_id)
+    assert state is not None
+    return state.state
+
+
+async def test_last_upload_follows_recent_data_source_import(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """On a cloud-connected source the data sets are old but imports are recent."""
+    old_sets = [
+        _data_set(
+            "up-old",
+            PUMP_ID,
+            60 * 24 * 90,
+            manufacturers=["Fake"],
+            model="Fake Pump",
+            tags=["insulin-pump"],
+        )
+    ]
+    sources = [
+        _import_source(_iso(NOW - timedelta(days=2))),
+        _import_source(_iso(NOW - timedelta(minutes=7))),
+    ]
+    state = await _last_upload_state(hass, aioclient_mock, freezer, old_sets, sources)
+    assert state == (NOW - timedelta(minutes=7)).isoformat()
+
+
+async def test_last_upload_keeps_newer_data_set_over_older_import(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    sets = [
+        _data_set(
+            "up-new",
+            PUMP_ID,
+            20,
+            manufacturers=["Fake"],
+            model="Fake Pump",
+            tags=["insulin-pump"],
+        )
+    ]
+    sources = [_import_source(_iso(NOW - timedelta(hours=3)))]
+    state = await _last_upload_state(hass, aioclient_mock, freezer, sets, sources)
+    assert state == (NOW - timedelta(minutes=20)).isoformat()
+
+
+async def test_last_upload_ignores_malformed_import_time(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    sets = [
+        _data_set(
+            "up-new",
+            PUMP_ID,
+            20,
+            manufacturers=["Fake"],
+            model="Fake Pump",
+            tags=["insulin-pump"],
+        )
+    ]
+    sources = [
+        _import_source("not a time"),
+        _import_source(12345),
+        _import_source(None),
+    ]
+    state = await _last_upload_state(hass, aioclient_mock, freezer, sets, sources)
+    assert state == (NOW - timedelta(minutes=20)).isoformat()
+
+
+async def test_last_upload_from_data_source_alone(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    sources = [_import_source(_iso(NOW - timedelta(minutes=4)))]
+    state = await _last_upload_state(hass, aioclient_mock, freezer, None, sources)
+    assert state == (NOW - timedelta(minutes=4)).isoformat()
+
+
+async def test_last_upload_unknown_without_data_sets_or_imports(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    sources = [_import_source("garbage")]
+    state = await _last_upload_state(hass, aioclient_mock, freezer, None, sources)
+    assert state == STATE_UNKNOWN
+
+
 async def test_data_source_connectivity_state(
     hass: HomeAssistant,
     aioclient_mock: AiohttpClientMocker,

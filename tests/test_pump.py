@@ -450,6 +450,79 @@ async def test_iob_labelled_as_of(
         assert "correction" not in text
 
 
+def _decision_at(age: timedelta) -> dict[str, Any]:
+    return {
+        "type": "dosingDecision",
+        "id": "dd-age",
+        "time": _iso(NOW - age),
+        "reason": "loop",
+        "insulinOnBoard": {"amount": 1.75},
+        "carbsOnBoard": {"amount": 20},
+    }
+
+
+@pytest.mark.parametrize(
+    ("age", "iob", "cob"),
+    [
+        (timedelta(minutes=10), "1.75", "20.0"),
+        (timedelta(hours=6), "1.75", "20.0"),
+        (timedelta(hours=6, seconds=1), STATE_UNKNOWN, STATE_UNKNOWN),
+        (timedelta(days=600), STATE_UNKNOWN, STATE_UNKNOWN),
+    ],
+)
+async def test_iob_cob_unknown_when_decision_is_stale(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+    age: timedelta,
+    iob: str,
+    cob: str,
+) -> None:
+    """Exactly 6 h is still shown; past it the state is unknown, the attrs stay."""
+    await _setup(hass, aioclient_mock, freezer, latest=[_decision_at(age)])
+
+    for key, expected in (("iob_at_last_decision", iob), ("cob_at_last_decision", cob)):
+        state = _state(hass, key)
+        assert state.state == expected
+        assert state.attributes["as_of"] == (NOW - age).isoformat()
+        assert state.attributes["source"] == "dosingDecision"
+        assert state.attributes["note"] == (
+            "As of the last dosing decision; not a live value."
+        )
+
+
+async def test_iob_cob_go_unknown_as_time_passes(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """A decision that was fresh at a refresh is unknown at the next one."""
+    entry = await _setup(
+        hass, aioclient_mock, freezer, latest=[_decision_at(timedelta(hours=5))]
+    )
+    assert _state(hass, "iob_at_last_decision").state == "1.75"
+
+    freezer.tick(timedelta(hours=1, minutes=1))
+    await entry.runtime_data.fast[USER_ID].async_refresh()
+    await hass.async_block_till_done()
+
+    assert _state(hass, "iob_at_last_decision").state == STATE_UNKNOWN
+    assert _state(hass, "cob_at_last_decision").state == STATE_UNKNOWN
+
+
+async def test_iob_cob_unknown_without_any_decision(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    await _setup(hass, aioclient_mock, freezer, latest=[])
+
+    for key in ("iob_at_last_decision", "cob_at_last_decision"):
+        state = _state(hass, key)
+        assert state.state == STATE_UNKNOWN
+        assert "as_of" not in state.attributes
+
+
 async def test_iob_from_bolus_calculator_without_decision(
     hass: HomeAssistant,
     aioclient_mock: AiohttpClientMocker,

@@ -231,6 +231,9 @@ BASAL_LOOKBACK = timedelta(hours=12)
 # How long after its end the newest basal segment still counts as current;
 # after that the pump's state is unknown rather than its last known state.
 BASAL_STALE_GRACE = timedelta(hours=2)
+# How long after its time a dosing decision's on-board amounts still count as
+# current enough to show; after that they read unknown, not as an old value.
+DECISION_STALE_AFTER = timedelta(hours=6)
 
 # A record lasting longer than this has no usable duration: it is malformed.
 MAX_DURATION = timedelta(days=7)
@@ -288,6 +291,11 @@ def current_basal(latest: Latest, now: datetime) -> dict | None:
     if times is None or now > times[1] + BASAL_STALE_GRACE:
         return None
     return basal
+
+
+def decision_is_current(time: datetime, now: datetime) -> bool:
+    """Whether a decision made at ``time`` is within ``DECISION_STALE_AFTER``."""
+    return now <= time + DECISION_STALE_AFTER
 
 
 def merge_window(
