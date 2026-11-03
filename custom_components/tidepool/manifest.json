@@ -1,9 +1,13 @@
 {
   "domain": "tidepool",
   "name": "Tidepool",
-  "codeowners": ["@ceb3"],
+  "after_dependencies": [
+    "recorder"
+  ],
+  "codeowners": [
+    "@ceb3"
+  ],
   "config_flow": true,
-  "after_dependencies": ["recorder"],
   "documentation": "https://github.com/ceb3/ha-tidepool",
   "integration_type": "service",
   "iot_class": "cloud_polling",
